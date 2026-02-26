@@ -1,0 +1,11 @@
+# Session logs (generated at runtime)
+*.json.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~

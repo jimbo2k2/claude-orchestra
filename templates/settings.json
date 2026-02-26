@@ -1,0 +1,30 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/claude-scripts/stage-changes.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/claude-scripts/verify-completion.sh"
+          },
+          {
+            "type": "command",
+            "command": "~/claude-scripts/commit-and-update.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
