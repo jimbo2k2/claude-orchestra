@@ -25,6 +25,13 @@ COOLDOWN_SECONDS="${COOLDOWN_SECONDS:-15}"     # Pause between normal handovers
 CRASH_COOLDOWN_SECONDS="${CRASH_COOLDOWN_SECONDS:-30}"  # Longer pause after crash recovery
 NOTIFY_WEBHOOK="${NOTIFY_WEBHOOK:-}"           # Optional webhook (Telegram, Slack, etc.)
 
+# ─── Clear nested-session guard ──────────────────────────────────────────────
+# When orchestra is invoked from within a Claude Code session (e.g. user asks
+# Claude to start orchestra), the CLAUDECODE env var is inherited. This causes
+# `claude -p` to refuse to launch ("cannot be launched inside another session").
+# Orchestra sessions are independent — clear the guard.
+unset CLAUDECODE
+
 # ─── Ensure we're in a git repo ───────────────────────────────────────────────
 
 if ! git rev-parse --show-toplevel &>/dev/null; then
@@ -191,6 +198,51 @@ Your final output line must be exactly one of:
 - BLOCKED — needs human input (explain in .orchestra/HANDOVER.md)'
 
 # ─── Main loop ────────────────────────────────────────────────────────────────
+
+# ─── RAM monitor ─────────────────────────────────────────────────────────────
+# Background process that logs memory usage every 10s and captures top processes
+# when available RAM drops below threshold. Killed on orchestrator exit.
+
+RAM_LOG="$LOG_DIR/ram.log"
+RAM_LOW_THRESHOLD_KB="${RAM_LOW_THRESHOLD_KB:-512000}"  # 500MB default
+
+start_ram_monitor() {
+    (
+        echo "# RAM monitor started $(date -u +%Y-%m-%dT%H:%M:%SZ) (threshold: ${RAM_LOW_THRESHOLD_KB}kB)" >> "$RAM_LOG"
+        while true; do
+            if [ -f /proc/meminfo ]; then
+                # Linux
+                avail_kb=$(awk '/MemAvailable/{print $2}' /proc/meminfo)
+                total_kb=$(awk '/MemTotal/{print $2}' /proc/meminfo)
+                used_kb=$((total_kb - avail_kb))
+                pct=$((used_kb * 100 / total_kb))
+                echo "$(date -u +%H:%M:%S) used:${used_kb}kB avail:${avail_kb}kB (${pct}%)" >> "$RAM_LOG"
+
+                if [ "$avail_kb" -lt "$RAM_LOW_THRESHOLD_KB" ]; then
+                    echo "=== LOW RAM WARNING $(date -u +%Y-%m-%dT%H:%M:%SZ) avail:${avail_kb}kB ===" >> "$RAM_LOG"
+                    ps aux --sort=-%mem | head -8 >> "$RAM_LOG"
+                fi
+            else
+                # macOS fallback (for local testing)
+                vm_stat 2>/dev/null | head -5 >> "$RAM_LOG" || echo "$(date -u +%H:%M:%S) /proc/meminfo not available" >> "$RAM_LOG"
+            fi
+            sleep 10
+        done
+    ) &
+    RAM_MONITOR_PID=$!
+}
+
+stop_ram_monitor() {
+    if [ -n "${RAM_MONITOR_PID:-}" ] && kill -0 "$RAM_MONITOR_PID" 2>/dev/null; then
+        kill "$RAM_MONITOR_PID" 2>/dev/null || true
+        wait "$RAM_MONITOR_PID" 2>/dev/null || true
+    fi
+}
+
+trap stop_ram_monitor EXIT
+start_ram_monitor
+
+# ─── Main loop state ─────────────────────────────────────────────────────────
 
 SESSION_COUNT=0
 CONSECUTIVE_CRASHES=0
