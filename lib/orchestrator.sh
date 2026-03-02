@@ -155,9 +155,20 @@ SESSION_PROMPT='You are starting an autonomous work session. Follow these steps 
 2. Read .orchestra/HANDOVER.md, then .orchestra/INBOX.md, then .orchestra/TODO.md
    Do NOT read .orchestra/CHANGELOG.md unless HANDOVER.md refers you to it for specific context
 3. If .orchestra/INBOX.md has unprocessed messages, follow those instructions first
-4. Pick up the SINGLE next incomplete task from .orchestra/TODO.md (the first unchecked item)
-5. Complete that task fully.
-6. Run tests after each significant change.
+4. BEFORE starting work, classify the next task'"'"'s complexity:
+   - SONNET tasks: Single file creation from clear spec, CRUD server actions, UI
+     components with known patterns, config/manifest files, dependency installs,
+     build verification, documentation updates, file renames
+   - OPUS tasks: Cross-file reasoning, complex business logic with edge cases,
+     data transformation with merging/linking, design audits across multiple files,
+     cron job logic with idempotency, seed scripts with data relationships
+   Default to SONNET. Only classify as OPUS when the task genuinely requires
+   multi-step reasoning or judgment calls. Write your classification in
+   .orchestra/HANDOVER.md under "Model recommendation for next task:" so the
+   orchestrator can act on it.
+5. Pick up the next incomplete task from .orchestra/TODO.md (the first unchecked item)
+6. Complete that task fully.
+7. Run tests after each significant change.
 
 AFTER COMPLETING A TASK — Mandatory debug pass:
 Before checking off ANY task, you MUST do a self-review:
@@ -359,12 +370,35 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
     # Snapshot state files before the session runs
     PRE_STATE=$(snapshot_state_files)
 
+    # ─── Model selection ─────────────────────────────────────────────────────
+    # Read model recommendation from HANDOVER.md (written by previous session)
+    RECOMMENDED_MODEL=""
+    if [ -f "$STATE_DIR/HANDOVER.md" ]; then
+        RECOMMENDED_MODEL=$(grep -i 'model recommendation' "$STATE_DIR/HANDOVER.md" \
+            | tail -1 | grep -oi 'opus\|sonnet' || echo "")
+    fi
+
+    # Default to sonnet (cheaper), use opus only when explicitly recommended
+    # First session can be overridden via INITIAL_MODEL env var
+    MODEL_FLAG=""
+    if [ "$SESSION_COUNT" -eq 1 ] && [ -n "${INITIAL_MODEL:-}" ]; then
+        MODEL_FLAG="--model ${INITIAL_MODEL}"
+        notify "   Model: ${INITIAL_MODEL} (INITIAL_MODEL override)"
+    elif [ "${RECOMMENDED_MODEL,,}" = "opus" ]; then
+        MODEL_FLAG="--model opus"
+        notify "   Model: opus (recommended by previous session)"
+    else
+        MODEL_FLAG="--model sonnet"
+        notify "   Model: sonnet (default)"
+    fi
+
     # ─── Run Claude Code in headless mode ─────────────────────────────────────
     # stream-json goes to the log file for full metadata;
     # a jq filter extracts readable text for the terminal.
 
     set +eo pipefail
     claude -p "$CURRENT_PROMPT" \
+        $MODEL_FLAG \
         --output-format stream-json \
         --verbose \
         --dangerously-skip-permissions \
