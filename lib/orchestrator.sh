@@ -157,6 +157,36 @@ SESSION_PROMPT='You are starting an autonomous work session. Follow these steps 
 4. Pick up the SINGLE next incomplete task from .orchestra/TODO.md (the first unchecked item)
 5. Complete ONLY that one task. Do not start additional tasks.
 6. Run tests after each significant change.
+
+AFTER COMPLETING A TASK — Mandatory debug pass:
+Before checking off ANY task, you MUST do a self-review:
+
+PASS 1 (mandatory):
+- Re-read every file you created or modified in this session
+- Check for: missing imports, wrong variable names, hardcoded values that should
+  reference constants/config, unclosed tags/brackets, incorrect function signatures,
+  props that don'"'"'t match component interfaces, SQL column names that don'"'"'t match
+  the schema, server actions missing "use server", client components missing
+  "use client"
+- Run the build/test command to confirm no regressions
+- Rate the issues found on a 3-point scale:
+  CLEAN — no issues found, or only trivial (whitespace, formatting)
+  MINOR — 1-2 small issues (missing optional prop, imprecise type) that you fixed
+  SIGNIFICANT — logic errors, broken data flow, missing functionality, wrong API
+    usage, or 3+ minor issues
+
+PASS 2 (conditional — only if Pass 1 rated SIGNIFICANT):
+- After fixing all Pass 1 issues, do a second review focusing on:
+  - Does the fix introduce new problems?
+  - Does the component/action integrate correctly with existing code?
+  - Are edge cases handled (empty state, error state, loading state)?
+  - Run build/tests again
+- If Pass 2 still finds issues, fix them but do NOT do a third pass — note
+  remaining concerns in HANDOVER.md for the next session
+
+Log your debug pass results in .orchestra/CHANGELOG.md:
+  "Debug: CLEAN" or "Debug: MINOR (fixed X)" or "Debug: SIGNIFICANT → Pass 2 (fixed X, Y)"
+
 7. Once the task is done (or if you cannot finish it), run /compact to free context,
    then update the state files as described in CLAUDE.md.
 
@@ -186,6 +216,36 @@ The previous session exited abnormally. There may be partial or broken work.
 6. Then pick up the next incomplete task from .orchestra/TODO.md (first unchecked item)
 7. Complete ONLY that one task. Do not start additional tasks.
 8. Run tests after each significant change.
+
+AFTER COMPLETING A TASK — Mandatory debug pass:
+Before checking off ANY task (including the crash fix), you MUST do a self-review:
+
+PASS 1 (mandatory):
+- Re-read every file you created or modified in this session
+- Check for: missing imports, wrong variable names, hardcoded values that should
+  reference constants/config, unclosed tags/brackets, incorrect function signatures,
+  props that don'"'"'t match component interfaces, SQL column names that don'"'"'t match
+  the schema, server actions missing "use server", client components missing
+  "use client"
+- Run the build/test command to confirm no regressions
+- Rate the issues found on a 3-point scale:
+  CLEAN — no issues found, or only trivial (whitespace, formatting)
+  MINOR — 1-2 small issues (missing optional prop, imprecise type) that you fixed
+  SIGNIFICANT — logic errors, broken data flow, missing functionality, wrong API
+    usage, or 3+ minor issues
+
+PASS 2 (conditional — only if Pass 1 rated SIGNIFICANT):
+- After fixing all Pass 1 issues, do a second review focusing on:
+  - Does the fix introduce new problems?
+  - Does the component/action integrate correctly with existing code?
+  - Are edge cases handled (empty state, error state, loading state)?
+  - Run build/tests again
+- If Pass 2 still finds issues, fix them but do NOT do a third pass — note
+  remaining concerns in HANDOVER.md for the next session
+
+Log your debug pass results in .orchestra/CHANGELOG.md:
+  "Debug: CLEAN" or "Debug: MINOR (fixed X)" or "Debug: SIGNIFICANT → Pass 2 (fixed X, Y)"
+
 9. Once done, run /compact then update state files as described in CLAUDE.md.
 
 CRITICAL — State file updates:
