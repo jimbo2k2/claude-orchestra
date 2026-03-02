@@ -94,6 +94,29 @@ notify() {
     fi
 }
 
+# ─── Configure lean settings for autonomous sessions ─────────────────────────
+# Back up interactive settings and install autonomous config (no heavy plugins)
+CLAUDE_SETTINGS="$PROJECT_DIR/.claude/settings.json"
+CLAUDE_SETTINGS_BACKUP="$PROJECT_DIR/.claude/settings.interactive.json"
+
+if [ -f "$CLAUDE_SETTINGS" ]; then
+    cp "$CLAUDE_SETTINGS" "$CLAUDE_SETTINGS_BACKUP"
+fi
+
+AUTONOMOUS_SETTINGS="$(dirname "$(realpath "$0")")/../templates/settings-autonomous.json"
+if [ -f "$AUTONOMOUS_SETTINGS" ]; then
+    mkdir -p "$PROJECT_DIR/.claude"
+    cp "$AUTONOMOUS_SETTINGS" "$CLAUDE_SETTINGS"
+    notify "Installed autonomous settings (lean plugin set)"
+fi
+
+restore_settings() {
+    if [ -f "$CLAUDE_SETTINGS_BACKUP" ]; then
+        cp "$CLAUDE_SETTINGS_BACKUP" "$CLAUDE_SETTINGS"
+        rm -f "$CLAUDE_SETTINGS_BACKUP"
+    fi
+}
+
 # ─── State file change detection ─────────────────────────────────────────────
 # Snapshots state file checksums so we can detect if a crashed session
 # managed to update them before dying.
@@ -337,7 +360,7 @@ stop_ram_monitor() {
     fi
 }
 
-trap stop_ram_monitor EXIT
+trap 'stop_ram_monitor; restore_settings' EXIT
 start_ram_monitor
 
 # ─── Main loop state ─────────────────────────────────────────────────────────
