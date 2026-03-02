@@ -15,21 +15,33 @@ cd "$PROJECT_DIR"
 
 # Only commit if there are staged changes
 if ! git diff --cached --quiet 2>/dev/null; then
-    # Build a commit message from the staged files
     CHANGED_FILES=$(git diff --cached --name-only | head -20)
     FILE_COUNT=$(git diff --cached --name-only | wc -l | tr -d ' ')
 
-    COMMIT_MSG="auto: session update ($FILE_COUNT files)
+    # Read Claude-generated commit message, fall back to generic
+    TASK_SUMMARY=""
+    if [ -f "$STATE_DIR/COMMIT_MSG" ]; then
+        TASK_SUMMARY=$(head -c 68 "$STATE_DIR/COMMIT_MSG" | tr -d '\n')
+    fi
+
+    if [ -z "$TASK_SUMMARY" ]; then
+        TASK_SUMMARY="session update ($FILE_COUNT files)"
+    fi
+
+    COMMIT_MSG="auto: $TASK_SUMMARY
 
 Session: $SESSION_ID
 Time: $TIMESTAMP
-Files:
+Files changed: $FILE_COUNT
 $CHANGED_FILES"
 
     git commit -m "$COMMIT_MSG" --no-verify 2>/dev/null || true
 fi
 
 # Also stage and commit state files if they've changed
+# Clean up COMMIT_MSG after use (it's per-session, not a persistent state file)
+rm -f "$STATE_DIR/COMMIT_MSG"
+
 for STATE_FILE in TODO.md CHANGELOG.md HANDOVER.md DECISIONS.md INBOX.md; do
     if [ -f "$STATE_DIR/$STATE_FILE" ]; then
         if ! git diff --quiet "$STATE_DIR/$STATE_FILE" 2>/dev/null; then

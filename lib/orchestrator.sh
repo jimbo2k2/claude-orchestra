@@ -197,6 +197,10 @@ CRITICAL — State file updates:
 - .orchestra/TODO.md: check off what you completed, add any discovered sub-tasks
 - .orchestra/CHANGELOG.md: append a session entry with timestamp and summary
 - .orchestra/HANDOVER.md: overwrite with context the next session needs
+- .orchestra/COMMIT_MSG: write a single-line commit message (max 68 chars) summarizing
+  what you built this session, e.g. "Create pocket-money-balance component (R29)" or
+  "Daily accrual cron with idempotent upsert (R27, R33)". Reference requirement numbers
+  from TODO.md where possible.
 
 Your final output line must be exactly one of:
 - HANDOVER — you completed the task but more tasks remain in .orchestra/TODO.md
@@ -251,6 +255,8 @@ Log your debug pass results in .orchestra/CHANGELOG.md:
 CRITICAL — State file updates:
 - Update .orchestra/TODO.md, .orchestra/CHANGELOG.md, and .orchestra/HANDOVER.md BEFORE finishing
 - In .orchestra/CHANGELOG.md, note that this was a recovery session
+- .orchestra/COMMIT_MSG: write a single-line commit message (max 68 chars) summarizing
+  what you built/fixed this session. Reference requirement numbers where possible.
 
 Your final output line must be exactly one of:
 - HANDOVER — task done, more remain
