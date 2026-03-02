@@ -177,7 +177,8 @@ SESSION_PROMPT='You are starting an autonomous work session. Follow these steps 
 1. Read .orchestra/PLAN.md (skim for overall goal and acceptance criteria)
 2. Read .orchestra/HANDOVER.md, then .orchestra/INBOX.md, then .orchestra/TODO.md
    Do NOT read .orchestra/CHANGELOG.md unless HANDOVER.md refers you to it for specific context
-3. If .orchestra/INBOX.md has unprocessed messages, follow those instructions first
+3. If .orchestra/INBOX.md has unprocessed messages in the "Messages" section,
+   follow those instructions first, then move them to the "Processed" section
 4. BEFORE starting work, classify the next task'"'"'s complexity:
    - SONNET tasks: Single file creation from clear spec, CRUD server actions, UI
      components with known patterns, config/manifest files, dependency installs,
@@ -228,8 +229,11 @@ AFTER DEBUG PASS — Context capacity check:
   straightforward task (single file creation, config change, CRUD actions, UI component
   from clear spec), then:
   a. Update .orchestra/TODO.md immediately (check off the completed task)
-  b. Pick up the next incomplete task and continue working
-  c. Repeat this check after each task
+  b. Re-read .orchestra/INBOX.md — if new messages appear in the "Messages"
+     section, follow those instructions and move them to "Processed" before
+     continuing with the next task
+  c. Pick up the next incomplete task and continue working
+  d. Repeat this check after each task
 - If you are ABOVE 50% context usage, OR the next task requires complex reasoning
   (cross-file refactoring, business logic with edge cases, design audits across multiple
   files), then stop and proceed to state file updates below.
@@ -298,8 +302,11 @@ AFTER DEBUG PASS — Context capacity check:
 - If you estimate you are BELOW 50% context usage AND the next TODO item is a
   straightforward task, then:
   a. Update .orchestra/TODO.md immediately (check off the completed task)
-  b. Pick up the next incomplete task and continue working
-  c. Repeat this check after each task
+  b. Re-read .orchestra/INBOX.md — if new messages appear in the "Messages"
+     section, follow those instructions and move them to "Processed" before
+     continuing with the next task
+  c. Pick up the next incomplete task and continue working
+  d. Repeat this check after each task
 - If you are ABOVE 50% context usage, OR the next task requires complex reasoning,
   then stop and proceed to state file updates below.
 - When in doubt, stop — it is better to hand over cleanly than to run out of context.
