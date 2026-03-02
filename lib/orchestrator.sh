@@ -145,17 +145,18 @@ Time: $(date -u +%Y-%m-%dT%H:%M:%SZ)" --no-verify 2>/dev/null || true
 
 # ─── Session prompts ──────────────────────────────────────────────────────────
 #
-# Layer 2: Single-task scoping. Each session works on ONE task only.
-# This keeps context usage bounded and makes crashes less costly.
+# Layer 2: Multi-task sessions with context capacity check.
+# Sessions complete one task, then evaluate whether to continue with the next.
 # Detailed instructions and context management rules live in CLAUDE.md.
 
 SESSION_PROMPT='You are starting an autonomous work session. Follow these steps exactly:
 
 1. Read .orchestra/PLAN.md (skim for overall goal and acceptance criteria)
-2. Read .orchestra/HANDOVER.md, then .orchestra/INBOX.md, then .orchestra/TODO.md, then .orchestra/CHANGELOG.md
+2. Read .orchestra/HANDOVER.md, then .orchestra/INBOX.md, then .orchestra/TODO.md
+   Do NOT read .orchestra/CHANGELOG.md unless HANDOVER.md refers you to it for specific context
 3. If .orchestra/INBOX.md has unprocessed messages, follow those instructions first
 4. Pick up the SINGLE next incomplete task from .orchestra/TODO.md (the first unchecked item)
-5. Complete ONLY that one task. Do not start additional tasks.
+5. Complete that task fully.
 6. Run tests after each significant change.
 
 AFTER COMPLETING A TASK — Mandatory debug pass:
@@ -187,15 +188,23 @@ PASS 2 (conditional — only if Pass 1 rated SIGNIFICANT):
 Log your debug pass results in .orchestra/CHANGELOG.md:
   "Debug: CLEAN" or "Debug: MINOR (fixed X)" or "Debug: SIGNIFICANT → Pass 2 (fixed X, Y)"
 
-7. Once the task is done (or if you cannot finish it), run /compact to free context,
-   then update the state files as described in CLAUDE.md.
+AFTER DEBUG PASS — Context capacity check:
+- Evaluate how much of your context window you have used so far (rough percentage)
+- If you estimate you are BELOW 50% context usage AND the next TODO item is a
+  straightforward task (single file creation, config change, CRUD actions, UI component
+  from clear spec), then:
+  a. Update .orchestra/TODO.md immediately (check off the completed task)
+  b. Pick up the next incomplete task and continue working
+  c. Repeat this check after each task
+- If you are ABOVE 50% context usage, OR the next task requires complex reasoning
+  (cross-file refactoring, business logic with edge cases, design audits across multiple
+  files), then stop and proceed to state file updates below.
+- When in doubt, stop — it is better to hand over cleanly than to run out of context.
 
-CRITICAL — State file updates:
-- These updates are the MOST IMPORTANT part of your session
-- Update state files IMMEDIATELY after completing or stopping your task
-- Do NOT do any other work after updating state files
-- .orchestra/TODO.md: check off what you completed, add any discovered sub-tasks
-- .orchestra/CHANGELOG.md: append a session entry with timestamp and summary
+CRITICAL — State file updates (do this BEFORE exiting):
+- Run /compact to free context
+- .orchestra/TODO.md: check off ALL tasks you completed this session
+- .orchestra/CHANGELOG.md: append ONE session entry listing all completed tasks
 - .orchestra/HANDOVER.md: overwrite with context the next session needs
 - .orchestra/COMMIT_MSG: write a single-line commit message (max 68 chars) summarizing
   what you built this session, e.g. "Create pocket-money-balance component (R29)" or
@@ -203,7 +212,7 @@ CRITICAL — State file updates:
   from TODO.md where possible.
 
 Your final output line must be exactly one of:
-- HANDOVER — you completed the task but more tasks remain in .orchestra/TODO.md
+- HANDOVER — you completed one or more tasks but more remain in .orchestra/TODO.md
 - COMPLETE — all TODO items are done and tests pass
 - BLOCKED — you need human input (explain in .orchestra/HANDOVER.md)'
 
@@ -218,7 +227,7 @@ The previous session exited abnormally. There may be partial or broken work.
 4. If tests pass, check whether the last TODO item was fully completed
 5. Either finish the in-progress item or revert partial work cleanly
 6. Then pick up the next incomplete task from .orchestra/TODO.md (first unchecked item)
-7. Complete ONLY that one task. Do not start additional tasks.
+7. Complete that task fully.
 8. Run tests after each significant change.
 
 AFTER COMPLETING A TASK — Mandatory debug pass:
@@ -250,16 +259,28 @@ PASS 2 (conditional — only if Pass 1 rated SIGNIFICANT):
 Log your debug pass results in .orchestra/CHANGELOG.md:
   "Debug: CLEAN" or "Debug: MINOR (fixed X)" or "Debug: SIGNIFICANT → Pass 2 (fixed X, Y)"
 
-9. Once done, run /compact then update state files as described in CLAUDE.md.
+AFTER DEBUG PASS — Context capacity check:
+- Evaluate how much of your context window you have used so far (rough percentage)
+- If you estimate you are BELOW 50% context usage AND the next TODO item is a
+  straightforward task, then:
+  a. Update .orchestra/TODO.md immediately (check off the completed task)
+  b. Pick up the next incomplete task and continue working
+  c. Repeat this check after each task
+- If you are ABOVE 50% context usage, OR the next task requires complex reasoning,
+  then stop and proceed to state file updates below.
+- When in doubt, stop — it is better to hand over cleanly than to run out of context.
 
-CRITICAL — State file updates:
-- Update .orchestra/TODO.md, .orchestra/CHANGELOG.md, and .orchestra/HANDOVER.md BEFORE finishing
-- In .orchestra/CHANGELOG.md, note that this was a recovery session
+CRITICAL — State file updates (do this BEFORE exiting):
+- Run /compact to free context
+- .orchestra/TODO.md: check off ALL tasks you completed this session
+- .orchestra/CHANGELOG.md: append ONE session entry listing all completed tasks.
+  Note that this was a recovery session.
+- .orchestra/HANDOVER.md: overwrite with context the next session needs
 - .orchestra/COMMIT_MSG: write a single-line commit message (max 68 chars) summarizing
   what you built/fixed this session. Reference requirement numbers where possible.
 
 Your final output line must be exactly one of:
-- HANDOVER — task done, more remain
+- HANDOVER — you completed one or more tasks but more remain
 - COMPLETE — all TODO items done and tests pass
 - BLOCKED — needs human input (explain in .orchestra/HANDOVER.md)'
 
