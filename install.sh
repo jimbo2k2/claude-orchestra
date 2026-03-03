@@ -23,8 +23,8 @@ cp "$REPO_DIR/bin/orchestra" "$INSTALL_DIR/orchestra"
 # Copy lib scripts (hook scripts + orchestrator)
 cp "$REPO_DIR/lib/"*.sh "$INSTALL_DIR/"
 
-# Copy templates
-cp "$REPO_DIR/templates/"* "$INSTALL_DIR/templates/"
+# Copy templates (including subdirectories like docs/)
+cp -r "$REPO_DIR/templates/"* "$INSTALL_DIR/templates/"
 
 # Make everything executable
 chmod +x "$INSTALL_DIR/orchestra" "$INSTALL_DIR/"*.sh
