@@ -93,6 +93,14 @@ Resets all state files to blank templates.
 
 With `--archive`: copies current state files and session logs to `.orchestra/archive/NNN-label/` before resetting. The label is extracted from the PLAN.md objective.
 
+### `orchestra graduate [--label NAME]`
+
+Completes a build phase: archives state files, creates a `docs/` skeleton for long-lived documentation, restructures changelogs, and resets orchestra for the next build.
+
+The `--label` flag names the archive (e.g. `--label mvp-build`). If omitted, the label is extracted from PLAN.md.
+
+After running, follow the printed checklist to consolidate project knowledge from plan files and orchestra state into the `docs/` structure.
+
 ### `orchestra status`
 
 Shows current progress: tasks complete/remaining, sessions logged, archived plans, plan objective, and last handover.
@@ -136,6 +144,13 @@ your-project/
 ├── .claude/
 │   └── settings.json           # Hook definitions
 ├── CLAUDE.md                   # Project instructions + workflow section
+├── docs/                       # Long-lived documentation (created by orchestra graduate)
+│   ├── architecture/
+│   ├── business-logic/
+│   ├── design/
+│   ├── decisions/
+│   └── known-issues.md
+├── changelogs/                 # Per-build changelogs (created by orchestra graduate)
 └── ... your code ...
 ```
 

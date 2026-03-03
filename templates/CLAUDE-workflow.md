@@ -101,3 +101,12 @@ Your final output line must be EXACTLY one of these (no extra text on the line):
 If your session prompt mentions a previous crash, the codebase may be in a
 partially modified state. Always run tests first to assess the damage before
 picking up new work.
+
+### Graduation
+
+When a build phase is complete, run `orchestra graduate` to:
+- Archive state files and session logs
+- Create a `docs/` skeleton for long-lived documentation
+- Reset orchestra for the next build
+
+See the graduation checklist output for consolidation steps.

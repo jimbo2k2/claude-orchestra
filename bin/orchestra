@@ -39,6 +39,7 @@ usage() {
     echo "  init [dir]        Scaffold a project with .orchestra/ state files"
     echo "  run               Start the autonomous session loop"
     echo "  reset [--archive] Reset state files to blank templates"
+    echo "  graduate [--label NAME]  Archive, create docs skeleton, reset for next build"
     echo "  status            Show current project status"
     echo ""
     echo "Environment variables:"
@@ -179,9 +180,10 @@ cmd_reset() {
         shopt -s nullglob
         for d in "$archive_base"/[0-9][0-9][0-9]-*/; do
             [ -d "$d" ] || continue
-            local num="${d##*/}"
-            num="${num%%-*}"
-            num=$((10#$num))  # strip leading zeros
+            local name="${d%/}"       # strip trailing slash
+            name="${name##*/}"        # strip path prefix
+            local num="${name%%-*}"   # extract number before first hyphen
+            num=$((10#$num))
             [ "$num" -gt "$last_num" ] && last_num="$num"
         done
         $_old_nullglob
@@ -293,6 +295,190 @@ cmd_status() {
     fi
 }
 
+# ─── graduate ─────────────────────────────────────────────────────────────
+
+cmd_graduate() {
+    local label=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --label)
+                [ -z "${2:-}" ] && die "--label requires a value"
+                label="$2"
+                shift 2
+                ;;
+            *) die "Unknown option: $1" ;;
+        esac
+    done
+
+    local project_dir
+    project_dir="$(git rev-parse --show-toplevel 2>/dev/null)" || die "Not in a git repository"
+    local orchestra_dir="$project_dir/.orchestra"
+
+    if [ ! -d "$orchestra_dir" ]; then
+        die ".orchestra/ not found. Nothing to graduate."
+    fi
+
+    # Ensure there's actually content to archive
+    local has_content=false
+    for f in PLAN.md TODO.md CHANGELOG.md HANDOVER.md; do
+        if [ -f "$orchestra_dir/$f" ] && [ -s "$orchestra_dir/$f" ]; then
+            has_content=true
+            break
+        fi
+    done
+    [ "$has_content" = true ] || die ".orchestra/ has no content to graduate."
+
+    # ─── Archive ──────────────────────────────────────────────────────────────
+    local archive_base="$orchestra_dir/archive"
+    mkdir -p "$archive_base"
+
+    # Find next sequence number
+    local last_num=0
+    local _old_nullglob=$(shopt -p nullglob 2>/dev/null)
+    shopt -s nullglob
+    for d in "$archive_base"/[0-9][0-9][0-9]-*/; do
+        [ -d "$d" ] || continue
+        local name="${d%/}"       # strip trailing slash
+        name="${name##*/}"        # strip path prefix
+        local num="${name%%-*}"   # extract number before first hyphen
+        num=$((10#$num))
+        [ "$num" -gt "$last_num" ] && last_num="$num"
+    done
+    $_old_nullglob
+    local next_num=$((last_num + 1))
+
+    # Extract label from PLAN.md if not provided via --label
+    if [ -z "$label" ]; then
+        label="unnamed"
+        if [ -f "$orchestra_dir/PLAN.md" ]; then
+            local obj_line
+            obj_line=$(sed -n '/^## Objective/{n;/^$/d;p;}' "$orchestra_dir/PLAN.md" | head -1)
+            if [ -n "$obj_line" ]; then
+                label=$(echo "$obj_line" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9 ]//g' | tr ' ' '-' | cut -c1-40)
+            fi
+        fi
+    fi
+
+    local archive_dir
+    archive_dir=$(printf "%s/%03d-%s" "$archive_base" "$next_num" "$label")
+    mkdir -p "$archive_dir"
+
+    # Copy state files to archive
+    for f in PLAN.md TODO.md CHANGELOG.md HANDOVER.md INBOX.md DECISIONS.md; do
+        [ -f "$orchestra_dir/$f" ] && cp "$orchestra_dir/$f" "$archive_dir/$f"
+    done
+
+    # Copy session logs to archive
+    if [ -d "$orchestra_dir/session-logs" ] && [ "$(ls -A "$orchestra_dir/session-logs" 2>/dev/null)" ]; then
+        cp -r "$orchestra_dir/session-logs" "$archive_dir/session-logs"
+    fi
+
+    echo "Archived to $archive_dir"
+
+    # ─── Create docs/ skeleton ────────────────────────────────────────────────
+    local docs_dir="$project_dir/docs"
+
+    mkdir -p "$docs_dir/architecture"
+    mkdir -p "$docs_dir/business-logic"
+    mkdir -p "$docs_dir/design"
+    mkdir -p "$docs_dir/decisions"
+
+    # Copy template files (skip if already exist — don't overwrite previous builds)
+    if [ ! -f "$docs_dir/architecture/current.md" ] && [ -f "$TEMPLATE_DIR/docs/architecture/current.md" ]; then
+        cp "$TEMPLATE_DIR/docs/architecture/current.md" "$docs_dir/architecture/current.md"
+    fi
+
+    if [ ! -f "$docs_dir/design/tokens.md" ] && [ -f "$TEMPLATE_DIR/docs/design/tokens.md" ]; then
+        cp "$TEMPLATE_DIR/docs/design/tokens.md" "$docs_dir/design/tokens.md"
+    fi
+
+    if [ ! -f "$docs_dir/design/patterns.md" ] && [ -f "$TEMPLATE_DIR/docs/design/patterns.md" ]; then
+        cp "$TEMPLATE_DIR/docs/design/patterns.md" "$docs_dir/design/patterns.md"
+    fi
+
+    if [ ! -f "$docs_dir/decisions/current.md" ] && [ -f "$TEMPLATE_DIR/docs/decisions/current.md" ]; then
+        cp "$TEMPLATE_DIR/docs/decisions/current.md" "$docs_dir/decisions/current.md"
+    fi
+
+    # Build-specific decisions file — always create if it doesn't exist
+    if [ ! -f "$docs_dir/decisions/${label}.md" ] && [ -f "$TEMPLATE_DIR/docs/decisions/current.md" ]; then
+        cp "$TEMPLATE_DIR/docs/decisions/current.md" "$docs_dir/decisions/${label}.md"
+    fi
+
+    if [ ! -f "$docs_dir/known-issues.md" ] && [ -f "$TEMPLATE_DIR/docs/known-issues.md" ]; then
+        cp "$TEMPLATE_DIR/docs/known-issues.md" "$docs_dir/known-issues.md"
+    fi
+
+    echo "Created docs/ skeleton"
+
+    # ─── Restructure changelogs ───────────────────────────────────────────────
+    local changelogs_dir="$project_dir/changelogs"
+    mkdir -p "$changelogs_dir"
+
+    if [ -f "$project_dir/CHANGELOG.md" ]; then
+        mv "$project_dir/CHANGELOG.md" "$changelogs_dir/${label}.md"
+        echo "Moved CHANGELOG.md to changelogs/${label}.md"
+    fi
+
+    # Create fresh CHANGELOG.md from template
+    if [ -f "$TEMPLATE_DIR/CHANGELOG-fresh.md" ]; then
+        cp "$TEMPLATE_DIR/CHANGELOG-fresh.md" "$project_dir/CHANGELOG.md"
+        echo "Created fresh CHANGELOG.md"
+    fi
+
+    # ─── Reset orchestra state files ──────────────────────────────────────────
+    for f in TODO.md CHANGELOG.md HANDOVER.md INBOX.md DECISIONS.md PLAN.md; do
+        if [ -f "$TEMPLATE_DIR/$f" ]; then
+            cp "$TEMPLATE_DIR/$f" "$orchestra_dir/$f"
+        fi
+    done
+
+    # Clear session logs
+    rm -f "$orchestra_dir/session-logs/"*.json 2>/dev/null || true
+
+    echo "State files reset to templates."
+
+    # ─── Print consolidation checklist ────────────────────────────────────────
+    echo ""
+    echo "Orchestra graduated! Archive: ${archive_dir#$project_dir/}"
+    echo ""
+    echo "Created docs/ skeleton. Now consolidate your project knowledge:"
+    echo ""
+    echo "  [ ] docs/architecture/current.md"
+    echo "      Extract from: CLAUDE.md, your plan files"
+    echo "      Include: tech stack, DB schema, auth model, key conventions"
+    echo ""
+    echo "  [ ] docs/business-logic/"
+    echo "      Extract from: your plan files, orchestra PLAN.md"
+    echo "      Create one file per domain (e.g. gate-logic.md, pocket-money.md)"
+    echo "      Include: rules, formulas, worked examples — NOT code blocks"
+    echo ""
+    echo "  [ ] docs/design/tokens.md"
+    echo "      Extract from: any design reference files"
+    echo "      Include: colour values, typography, spacing as tables — NOT CSS"
+    echo ""
+    echo "  [ ] docs/decisions/${label}.md"
+    echo "      Extract from: plan files, orchestra DECISIONS.md"
+    echo "      Freeze all decisions from this build phase"
+    echo ""
+    echo "  [ ] docs/known-issues.md"
+    echo "      Extract from: orchestra HANDOVER.md, CHANGELOG.md"
+    echo "      Include: current caveats, gotchas, sharp edges"
+    echo ""
+    echo "  [ ] CLAUDE.md — rewrite as compact index (<100 lines)"
+    echo "      Keep: overview, tech stack, rules, docs/ pointers, orchestra workflow"
+    echo "      Remove: content that moved to docs/"
+    echo ""
+    echo "  [ ] Delete graduated source files (plan files, design refs, etc.)"
+    echo ""
+    echo "Rules for docs/:"
+    echo "  - NO code blocks that mirror implementation — they go stale silently"
+    echo "  - Describe rules and formulas in prose"
+    echo "  - Reference source files by path for implementation details"
+    echo "  - Mark any illustrative snippets with <!-- VERIFY -->"
+    echo "  - Add \"Last verified: YYYY-MM-DD\" to each file header"
+}
+
 # ─── Dispatch ─────────────────────────────────────────────────────────────────
 
 COMMAND="${1:-}"
@@ -301,8 +487,9 @@ shift 2>/dev/null || true
 case "$COMMAND" in
     init)   cmd_init "$@" ;;
     run)    cmd_run "$@" ;;
-    reset)  cmd_reset "$@" ;;
-    status) cmd_status "$@" ;;
+    reset)    cmd_reset "$@" ;;
+    graduate) cmd_graduate "$@" ;;
+    status)   cmd_status "$@" ;;
     -h|--help|help|"")
         usage
         exit 0
