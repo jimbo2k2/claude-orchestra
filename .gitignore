@@ -1,3 +1,6 @@
+# Worktrees
+.worktrees/
+
 # Session logs (generated at runtime)
 *.json.log
 
