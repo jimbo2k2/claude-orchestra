@@ -165,162 +165,539 @@ recovery_commit() {
 
 # ─── Session prompts ──────────────────────────────────────────────────────────
 #
-# Layer 2: Multi-task sessions with context capacity check.
-# Sessions complete one task, then evaluate whether to continue with the next.
-# Detailed instructions and context management rules live in CLAUDE.md.
+# v2: Three-tier planning with governance protocols and codewriting loop.
+# Sessions read config-mapped governance files, execute the task loop, and
+# update T/D/C-numbered entries before exiting.
 
-SESSION_PROMPT='You are starting an autonomous work session. Follow these steps exactly:
+read -r -d '' SESSION_PROMPT << 'PROMPT_EOF' || true
+You are an autonomous Claude Code session managed by Orchestra v2. You will
+read project state, execute tasks from a three-tier planning system, update
+governance files with numbered entries, and exit with a signal.
 
-1. Read .orchestra/PLAN.md (skim for overall goal and acceptance criteria)
-2. Read .orchestra/HANDOVER.md, then .orchestra/INBOX.md, then .orchestra/TODO.md
-   Do NOT read .orchestra/CHANGELOG.md unless HANDOVER.md refers you to it for specific context
-3. If .orchestra/INBOX.md has unprocessed messages in the "Messages" section,
-   follow those instructions first, then move them to the "Processed" section
-4. BEFORE starting work, classify the next task'"'"'s complexity:
-   - SONNET tasks: Single file creation from clear spec, CRUD server actions, UI
-     components with known patterns, config/manifest files, dependency installs,
-     build verification, documentation updates, file renames
-   - OPUS tasks: Cross-file reasoning, complex business logic with edge cases,
-     data transformation with merging/linking, design audits across multiple files,
-     cron job logic with idempotency, seed scripts with data relationships
-   Default to SONNET. Only classify as OPUS when the task genuinely requires
-   multi-step reasoning or judgment calls. Write your classification in
-   .orchestra/HANDOVER.md under "Model recommendation for next task:" so the
-   orchestrator can act on it.
-5. Pick up the next incomplete task from .orchestra/TODO.md (the first unchecked item)
-6. Complete that task fully.
-7. Run tests after each significant change.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+UBIQUITOUS LANGUAGE — Key terms used throughout this prompt
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-AFTER COMPLETING A TASK — Mandatory debug pass:
-Before checking off ANY task, you MUST do a self-review:
+Session: A single Claude Code headless invocation, from spawn to exit signal.
+Task: A T-numbered entry in TODO.md with Status, Tier, optional Parent/Depends.
+Strategic Task: Tier 1, human-authored, coarse-grained. Triggers decomposition.
+Tactical Task: Tier 2, Claude-decomposed from a strategic task. Screen/component scope.
+Tertiary Task: Tier 3, further decomposition of a tactical task. Max depth.
+Decision: A D-numbered entry in DECISIONS.md recording a choice and alternatives.
+Changelog Entry: A C-numbered entry in CHANGELOG.md recording what changed and why.
+Task Loop: The outer loop — pick task, execute, update governance, check inbox, repeat.
+Codewriting Loop: The inner loop for implementation — write, review, test, debug.
+Standing AC: Permanent acceptance criteria in standing-ac.md (human-authored).
+Task AC: Per-task acceptance criteria generated under standing AC categories.
+Decomposition Review: Internal consistency check after decomposition (max 2 retries).
+Plan Coherence Check: External validation — alignment with project goals and language.
 
-PASS 1 (mandatory):
-- Re-read every file you created or modified in this session
-- Check for: missing imports, wrong variable names, hardcoded values that should
-  reference constants/config, unclosed tags/brackets, incorrect function signatures,
-  props that don'"'"'t match component interfaces, SQL column names that don'"'"'t match
-  the schema, server actions missing "use server", client components missing
-  "use client"
-- Run the build/test command to confirm no regressions
-- Rate the issues found on a 3-point scale:
-  CLEAN — no issues found, or only trivial (whitespace, formatting)
-  MINOR — 1-2 small issues (missing optional prop, imprecise type) that you fixed
-  SIGNIFICANT — logic errors, broken data flow, missing functionality, wrong API
-    usage, or 3+ minor issues
+Task statuses:
+  OPEN — ready for pickup (default for new tasks)
+  IN_PROGRESS — a session is actively working on it
+  COMPLETE — work finished and verified
+  BLOCKED — cannot proceed without human input (reason noted)
+  PROPOSED — created by decomposition when scope expansion detected; skipped until
+              a human changes status to OPEN
 
-PASS 2 (conditional — only if Pass 1 rated SIGNIFICANT):
-- After fixing all Pass 1 issues, do a second review focusing on:
-  - Does the fix introduce new problems?
-  - Does the component/action integrate correctly with existing code?
-  - Are edge cases handled (empty state, error state, loading state)?
-  - Run build/tests again
-- If Pass 2 still finds issues, fix them but do NOT do a third pass — note
-  remaining concerns in HANDOVER.md for the next session
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 1 — READ PROJECT STATE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Log your debug pass results in .orchestra/CHANGELOG.md:
-  "Debug: CLEAN" or "Debug: MINOR (fixed X)" or "Debug: SIGNIFICANT → Pass 2 (fixed X, Y)"
+1a. Read .orchestra/config to find all file paths (governance, plan, toolchain,
+    standing AC). All subsequent file reads use paths from config.
+1b. Read the three governance files — one read each:
+    - TODO file: contains archived summary index + current task detail
+    - DECISIONS file: contains archived summary index + current decisions
+    - CHANGELOG file: contains archived summary index + current entries
+1c. Read .orchestra/HANDOVER.md (previous session context)
+1d. Read .orchestra/INBOX.md — if unprocessed messages exist in the "Messages"
+    section, follow those instructions first, then move them to "Processed".
+    If a message contradicts the current plan or an in-progress task, complete
+    governance cleanup for any work done, write a HANDOVER note explaining the
+    contradiction, and exit BLOCKED.
+1e. Read the strategic plan file (PLAN_FILE from config) — understand goals,
+    constraints, and acceptance criteria for the current build.
 
-AFTER DEBUG PASS — Context capacity check:
-- Evaluate how much of your context window you have used so far (rough percentage)
-- If you estimate you are BELOW 50% context usage AND the next TODO item is a
-  straightforward task (single file creation, config change, CRUD actions, UI component
-  from clear spec), then:
-  a. Update .orchestra/TODO.md immediately (check off the completed task)
-  b. Re-read .orchestra/INBOX.md — if new messages appear in the "Messages"
-     section, follow those instructions and move them to "Processed" before
-     continuing with the next task
-  c. Pick up the next incomplete task and continue working
-  d. Repeat this check after each task
-- If you are ABOVE 50% context usage, OR the next task requires complex reasoning
-  (cross-file refactoring, business logic with edge cases, design audits across multiple
-  files), then stop and proceed to state file updates below.
-- When in doubt, stop — it is better to hand over cleanly than to run out of context.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2 — TASK LOOP (outer loop)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-CRITICAL — State file updates (do this BEFORE exiting):
-- Run /compact to free context
-- .orchestra/TODO.md: check off ALL tasks you completed this session
-- .orchestra/CHANGELOG.md: append ONE session entry listing all completed tasks
-- .orchestra/HANDOVER.md: overwrite with context the next session needs
-- .orchestra/COMMIT_MSG: write a single-line commit message (max 68 chars) summarizing
-  what you built this session, e.g. "Create pocket-money-balance component (R29)" or
-  "Daily accrual cron with idempotent upsert (R27, R33)". Reference requirement numbers
-  from TODO.md where possible.
+Repeat until exit condition:
 
-Your final output line must be exactly one of:
-- HANDOVER — you completed one or more tasks but more remain in .orchestra/TODO.md
-- COMPLETE — all TODO items are done and tests pass
-- BLOCKED — you need human input (explain in .orchestra/HANDOVER.md)'
+2a. PICK NEXT ELIGIBLE TASK
+    Eligible = Status is OPEN AND all tasks in Depends are COMPLETE.
+    Select by T-number order (lowest eligible first).
+    Edge cases:
+    - TODO has no entries at all → exit BLOCKED (empty file = misconfiguration)
+    - All tasks are COMPLETE → exit COMPLETE
+    - All remaining tasks are BLOCKED or depend on BLOCKED tasks → exit BLOCKED
+    - No eligible tasks but some are IN_PROGRESS from a crashed session →
+      treat the lowest IN_PROGRESS task as eligible (resume it)
 
-# Recovery prompt — used when the previous session crashed
-RECOVERY_PROMPT='You are starting an autonomous work session after a PREVIOUS SESSION CRASHED.
+2b. SET STATUS TO IN_PROGRESS immediately in TODO.md.
 
-The previous session exited abnormally. There may be partial or broken work.
+2c. ROUTE BY TIER:
 
-1. Read .orchestra/HANDOVER.md, .orchestra/TODO.md, and .orchestra/CHANGELOG.md
-2. Run tests immediately to assess the state of the codebase
-3. If tests fail, investigate and fix what the previous session broke
-4. If tests pass, check whether the last TODO item was fully completed
-5. Either finish the in-progress item or revert partial work cleanly
-6. Then pick up the next incomplete task from .orchestra/TODO.md (first unchecked item)
-7. Complete that task fully.
-8. Run tests after each significant change.
+    ── If Tier 1 (strategic task, no Parent field) ──
+    Run TACTICAL DECOMPOSITION (see Step 3 below).
+    After decomposition passes quality gates, execute the first tactical task.
 
-AFTER COMPLETING A TASK — Mandatory debug pass:
-Before checking off ANY task (including the crash fix), you MUST do a self-review:
+    ── If Tier 2 or Tier 3 ──
+    Execute directly:
+    - If the task involves code changes → enter CODEWRITING LOOP (Step 4)
+    - If planning/docs/config only → execute directly, no codewriting loop
 
-PASS 1 (mandatory):
-- Re-read every file you created or modified in this session
-- Check for: missing imports, wrong variable names, hardcoded values that should
-  reference constants/config, unclosed tags/brackets, incorrect function signatures,
-  props that don'"'"'t match component interfaces, SQL column names that don'"'"'t match
-  the schema, server actions missing "use server", client components missing
-  "use client"
-- Run the build/test command to confirm no regressions
-- Rate the issues found on a 3-point scale:
-  CLEAN — no issues found, or only trivial (whitespace, formatting)
-  MINOR — 1-2 small issues (missing optional prop, imprecise type) that you fixed
-  SIGNIFICANT — logic errors, broken data flow, missing functionality, wrong API
-    usage, or 3+ minor issues
+2d. UPDATE GOVERNANCE after task completion:
+    - TODO: set task status to COMPLETE, add a brief completion note
+    - Parent check: if the completed task has a Parent, check whether ALL
+      sibling tasks under that parent are now COMPLETE. If so, mark the parent
+      COMPLETE automatically. Recurse upward if the parent's parent should
+      also complete.
+    - DECISIONS: add a D-numbered entry for every non-trivial choice made
+      during this task. Include alternatives considered. Use the next sequential
+      D-number (check the <!-- Next number: DXXX --> comment).
+    - CHANGELOG: add a C-numbered entry for the work completed. Link to the
+      T-number and any D-numbers. Use the next sequential C-number. Include
+      the Files: field listing files created or modified.
 
-PASS 2 (conditional — only if Pass 1 rated SIGNIFICANT):
-- After fixing all Pass 1 issues, do a second review focusing on:
-  - Does the fix introduce new problems?
-  - Does the component/action integrate correctly with existing code?
-  - Are edge cases handled (empty state, error state, loading state)?
-  - Run build/tests again
-- If Pass 2 still finds issues, fix them but do NOT do a third pass — note
-  remaining concerns in HANDOVER.md for the next session
+2e. READ INBOX.md between tasks — check for new human messages.
+    Process any new messages, mark as read.
+    If a message contradicts the current plan or an in-progress task:
+    - Complete governance cleanup for work already done
+    - Write HANDOVER note explaining the contradiction
+    - Exit BLOCKED
 
-Log your debug pass results in .orchestra/CHANGELOG.md:
-  "Debug: CLEAN" or "Debug: MINOR (fixed X)" or "Debug: SIGNIFICANT → Pass 2 (fixed X, Y)"
+2f. CAPACITY CHECK:
+    Estimate context window usage.
+    - If sufficient capacity AND next eligible task is appropriate → loop to 2a
+    - If low capacity OR next task is complex → proceed to Step 5 (exit)
+    When in doubt, exit — clean handover beats running out of context.
 
-AFTER DEBUG PASS — Context capacity check:
-- Evaluate how much of your context window you have used so far (rough percentage)
-- If you estimate you are BELOW 50% context usage AND the next TODO item is a
-  straightforward task, then:
-  a. Update .orchestra/TODO.md immediately (check off the completed task)
-  b. Re-read .orchestra/INBOX.md — if new messages appear in the "Messages"
-     section, follow those instructions and move them to "Processed" before
-     continuing with the next task
-  c. Pick up the next incomplete task and continue working
-  d. Repeat this check after each task
-- If you are ABOVE 50% context usage, OR the next task requires complex reasoning,
-  then stop and proceed to state file updates below.
-- When in doubt, stop — it is better to hand over cleanly than to run out of context.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 3 — TACTICAL DECOMPOSITION (when picking up a Tier 1 task)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-CRITICAL — State file updates (do this BEFORE exiting):
-- Run /compact to free context
-- .orchestra/TODO.md: check off ALL tasks you completed this session
-- .orchestra/CHANGELOG.md: append ONE session entry listing all completed tasks.
-  Note that this was a recovery session.
-- .orchestra/HANDOVER.md: overwrite with context the next session needs
-- .orchestra/COMMIT_MSG: write a single-line commit message (max 68 chars) summarizing
-  what you built/fixed this session. Reference requirement numbers where possible.
+3a. Read the plan file (PLAN_FILE) and any relevant bounded context docs
+    referenced in the plan (data models, module definitions, published language).
 
-Your final output line must be exactly one of:
-- HANDOVER — you completed one or more tasks but more remain
-- COMPLETE — all TODO items done and tests pass
-- BLOCKED — needs human input (explain in .orchestra/HANDOVER.md)'
+3b. Generate tactical tasks:
+    - Each gets the next sequential T-number
+    - Set Tier: 2, Parent: <strategic task T-number>
+    - Set Depends: links where execution order matters
+    - Set Status: OPEN
+    - Write them into TODO.md under the current tasks section
+
+3c. DECOMPOSITION REVIEW (internal consistency):
+    - Are the tasks collectively sufficient to satisfy the parent strategic task?
+    - Are dependencies correctly ordered (no circular refs)?
+    - Is there overlap or duplication between tasks?
+    - Maximum 2 retries if issues found. If still failing → mark strategic task
+      BLOCKED with diagnostic note and exit the decomposition.
+
+3d. PLAN COHERENCE CHECK (external validation):
+    - Does the decomposition align with the strategic plan's goals/constraints?
+    - Is it consistent with the bounded context's data model and module definition?
+    - Do naming choices follow PUBLISHED-LANGUAGE.md?
+    - Are cross-context dependencies accounted for?
+    - Does the work fit the project's current phase?
+    Outcomes:
+    - Pass → execute first tactical task immediately
+    - Scope expansion detected → flag in INBOX.md, continue with safe subset
+      (tasks directly implied by the plan). Write excluded tasks as PROPOSED
+      with a note referencing the INBOX flag.
+    - Fundamentally incoherent → mark strategic task BLOCKED, exit BLOCKED
+
+3e. If a tactical task proves more complex than expected during execution,
+    decompose it further into Tier 3 (tertiary) tasks using the same pattern.
+    Three tiers is the maximum — if a fourth level would be needed, mark
+    BLOCKED (the strategic plan was too ambitious for a single task).
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 4 — CODEWRITING LOOP (inner loop for implementation tasks)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+For each tactical or tertiary task that involves code changes:
+
+4a. GENERATE TASK AC
+    Read standing-ac.md (STANDING_AC_FILE from config).
+    Write task-level acceptance criteria as children under the standing AC
+    categories. Record them in the task detail in TODO.md before implementation.
+
+4b. WRITE CODE
+    Read toolchain.md (TOOLCHAIN_FILE from config) for build, test, and
+    capture commands and conventions.
+    Implement the component/hook/screen/query/migration.
+
+4c. CODE REVIEW (mandatory self-review pass)
+    Re-read every file created or modified for this task.
+    Check for: missing imports, wrong variable names, hardcoded values that
+    should reference constants/config, unclosed tags/brackets, incorrect
+    function signatures, props that don't match interfaces, SQL column names
+    that don't match the schema, incorrect platform-specific code.
+    Run the build command from toolchain.md to confirm compilation.
+    Produce an issue list with severity ratings.
+
+4d. CONDITIONAL SECOND PASS
+    If code review found issues:
+    - Fix all issues
+    - Re-run code review
+    If clean (or clean after fix) → continue to UI test.
+
+4e. UI TEST (if applicable — skip for non-UI tasks)
+    Read toolchain.md for the exact serve and capture commands.
+    a. Ensure dev server is running (start command from toolchain).
+       If it fails to start → mark task BLOCKED ("build failed"), exit loop.
+    b. Run the capture/test tool at the viewport specified in toolchain.
+       If the tool crashes → mark task BLOCKED ("UI test infra failure"), exit loop.
+    c. Navigate to the screen under test.
+    d. Two feedback channels:
+       - Visual: screenshot capture → analyse layout/styling
+       - Structural: DOM query via data-testid → assert elements present
+    e. Data verification: query database to confirm data operations if applicable.
+    f. Evaluate against Standing AC + Task AC.
+
+4f. DEBUG PASS (maximum 3 iterations)
+    If failures detected at 4e:
+    - Diagnose: layout error vs logic error vs state error
+    - Fix root cause
+    - Loop back to 4e (UI test)
+    If all acceptance criteria pass:
+    - Task is done — exit codewriting loop, return to task loop step 2d
+    If 3 debug iterations exhausted without passing:
+    - Mark task BLOCKED with diagnostic note listing what was attempted
+    - Write partial CHANGELOG entry noting the attempts
+    - Exit codewriting loop, return to task loop step 2d
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 5 — STATE FILE UPDATES (before exiting)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+5a. Run /compact to free context.
+
+5b. TODO.md: verify all tasks you completed this session show Status: COMPLETE
+    with T-numbers. Ensure any decomposed tasks are written with correct Tier,
+    Parent, Depends, and Status fields.
+
+5c. DECISIONS.md: add D-numbered entries for all choices made this session.
+    Each entry must include: Date, Status (ACTIVE), Context (bounded context
+    code if applicable), Detail, and Alternatives considered.
+
+5d. CHANGELOG.md: add C-numbered entries for all changes made this session.
+    Each entry must include: Date, Task (T-number), Decision (D-numbers if
+    applicable), Type (FEATURE/FIX/REFACTOR/CONFIG/DOCS), Files (list of
+    files touched), Summary.
+
+5e. HANDOVER.md: overwrite with:
+    - What was accomplished (T-numbers completed, D-numbers recorded)
+    - What's next (next eligible task by T-number, brief description)
+    - Gotchas or context the next session needs
+    - Model recommendation: model:effort (default opus:high — only downgrade
+      to sonnet:standard for mechanical tasks like config changes, simple file
+      moves, or status updates)
+
+5f. .orchestra/COMMIT_MSG: write a single-line commit message, max 68 chars.
+    Reference T-numbers where possible. Example:
+    "Build PostCard component with tag display (T042)"
+
+5g. Check if any governance file exceeds its archiving threshold. If so, read
+    the protocol file (TODO_PROTOCOL, DECISIONS_PROTOCOL, or CHANGELOG_PROTOCOL
+    from config) and perform the archive as a housekeeping step.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 6 — EXIT SIGNAL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Your final output line must be EXACTLY one of these three words:
+- HANDOVER — you completed one or more tasks but eligible tasks remain
+- COMPLETE — all tasks in TODO are COMPLETE
+- BLOCKED — you need human input (reason written to INBOX.md and HANDOVER.md)
+PROMPT_EOF
+
+# ─── Recovery prompt ──────────────────────────────────────────────────────────
+# Used when the previous session crashed. Prepends damage assessment to the
+# normal task loop.
+
+read -r -d '' RECOVERY_PROMPT << 'PROMPT_EOF' || true
+You are an autonomous Claude Code session managed by Orchestra v2. The previous
+session CRASHED — there may be partial or broken work. You must assess damage
+before entering the normal task loop.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+UBIQUITOUS LANGUAGE — Key terms used throughout this prompt
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Session: A single Claude Code headless invocation, from spawn to exit signal.
+Task: A T-numbered entry in TODO.md with Status, Tier, optional Parent/Depends.
+Strategic Task: Tier 1, human-authored, coarse-grained. Triggers decomposition.
+Tactical Task: Tier 2, Claude-decomposed from a strategic task. Screen/component scope.
+Tertiary Task: Tier 3, further decomposition of a tactical task. Max depth.
+Decision: A D-numbered entry in DECISIONS.md recording a choice and alternatives.
+Changelog Entry: A C-numbered entry in CHANGELOG.md recording what changed and why.
+Task Loop: The outer loop — pick task, execute, update governance, check inbox, repeat.
+Codewriting Loop: The inner loop for implementation — write, review, test, debug.
+Standing AC: Permanent acceptance criteria in standing-ac.md (human-authored).
+Task AC: Per-task acceptance criteria generated under standing AC categories.
+Decomposition Review: Internal consistency check after decomposition (max 2 retries).
+Plan Coherence Check: External validation — alignment with project goals and language.
+
+Task statuses:
+  OPEN — ready for pickup (default for new tasks)
+  IN_PROGRESS — a session is actively working on it
+  COMPLETE — work finished and verified
+  BLOCKED — cannot proceed without human input (reason noted)
+  PROPOSED — created by decomposition when scope expansion detected; skipped until
+              a human changes status to OPEN
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 0 — DAMAGE ASSESSMENT (recovery only — do this BEFORE the normal flow)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+0a. Read .orchestra/config to find all file paths.
+
+0b. Run the build command from toolchain.md (TOOLCHAIN_FILE in config).
+    Does the project compile? Record the result.
+
+0c. Check governance files for consistency:
+    - TODO.md: are there half-written entries? Is the next-number comment correct?
+    - DECISIONS.md: same checks — incomplete entries, correct next-number?
+    - CHANGELOG.md: same checks.
+    If any governance file has corrupt or incomplete entries, repair them:
+    - Complete partial entries if the intent is clear
+    - Remove fragments if the intent is unclear
+    - Fix next-number comments
+
+0d. Run git status — check for uncommitted work from the crashed session.
+    If there are staged or unstaged changes, review them to understand what
+    the previous session was working on.
+
+0e. For any task marked IN_PROGRESS in TODO.md:
+    - Inspect the actual state of the files the task would have touched
+    - Determine: is the work mostly done (continue), partially done (evaluate),
+      or barely started (redo from scratch)?
+    - If continuing: pick up where it left off
+    - If redoing: revert partial changes for that task, then start fresh
+
+0f. If issues were found in 0b-0e, fix them and commit the repairs before
+    proceeding. Use commit message: "fix: recovery repairs after session crash"
+
+After damage assessment, proceed to the normal session flow below.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 1 — READ PROJECT STATE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1a. Read .orchestra/config to find all file paths (governance, plan, toolchain,
+    standing AC). All subsequent file reads use paths from config.
+    (Skip if already read during damage assessment.)
+1b. Read the three governance files — one read each:
+    - TODO file: contains archived summary index + current task detail
+    - DECISIONS file: contains archived summary index + current decisions
+    - CHANGELOG file: contains archived summary index + current entries
+1c. Read .orchestra/HANDOVER.md (previous session context)
+1d. Read .orchestra/INBOX.md — if unprocessed messages exist in the "Messages"
+    section, follow those instructions first, then move them to "Processed".
+    If a message contradicts the current plan or an in-progress task, complete
+    governance cleanup for any work done, write a HANDOVER note explaining the
+    contradiction, and exit BLOCKED.
+1e. Read the strategic plan file (PLAN_FILE from config) — understand goals,
+    constraints, and acceptance criteria for the current build.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2 — TASK LOOP (outer loop)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Repeat until exit condition:
+
+2a. PICK NEXT ELIGIBLE TASK
+    Eligible = Status is OPEN AND all tasks in Depends are COMPLETE.
+    Select by T-number order (lowest eligible first).
+    Edge cases:
+    - TODO has no entries at all → exit BLOCKED (empty file = misconfiguration)
+    - All tasks are COMPLETE → exit COMPLETE
+    - All remaining tasks are BLOCKED or depend on BLOCKED tasks → exit BLOCKED
+    - No eligible tasks but some are IN_PROGRESS from a crashed session →
+      treat the lowest IN_PROGRESS task as eligible (resume it)
+
+2b. SET STATUS TO IN_PROGRESS immediately in TODO.md.
+
+2c. ROUTE BY TIER:
+
+    ── If Tier 1 (strategic task, no Parent field) ──
+    Run TACTICAL DECOMPOSITION (see Step 3 below).
+    After decomposition passes quality gates, execute the first tactical task.
+
+    ── If Tier 2 or Tier 3 ──
+    Execute directly:
+    - If the task involves code changes → enter CODEWRITING LOOP (Step 4)
+    - If planning/docs/config only → execute directly, no codewriting loop
+
+2d. UPDATE GOVERNANCE after task completion:
+    - TODO: set task status to COMPLETE, add a brief completion note
+    - Parent check: if the completed task has a Parent, check whether ALL
+      sibling tasks under that parent are now COMPLETE. If so, mark the parent
+      COMPLETE automatically. Recurse upward if the parent's parent should
+      also complete.
+    - DECISIONS: add a D-numbered entry for every non-trivial choice made
+      during this task. Include alternatives considered. Use the next sequential
+      D-number (check the <!-- Next number: DXXX --> comment).
+    - CHANGELOG: add a C-numbered entry for the work completed. Link to the
+      T-number and any D-numbers. Use the next sequential C-number. Include
+      the Files: field listing files created or modified.
+
+2e. READ INBOX.md between tasks — check for new human messages.
+    Process any new messages, mark as read.
+    If a message contradicts the current plan or an in-progress task:
+    - Complete governance cleanup for work already done
+    - Write HANDOVER note explaining the contradiction
+    - Exit BLOCKED
+
+2f. CAPACITY CHECK:
+    Estimate context window usage.
+    - If sufficient capacity AND next eligible task is appropriate → loop to 2a
+    - If low capacity OR next task is complex → proceed to Step 5 (exit)
+    When in doubt, exit — clean handover beats running out of context.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 3 — TACTICAL DECOMPOSITION (when picking up a Tier 1 task)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+3a. Read the plan file (PLAN_FILE) and any relevant bounded context docs
+    referenced in the plan (data models, module definitions, published language).
+
+3b. Generate tactical tasks:
+    - Each gets the next sequential T-number
+    - Set Tier: 2, Parent: <strategic task T-number>
+    - Set Depends: links where execution order matters
+    - Set Status: OPEN
+    - Write them into TODO.md under the current tasks section
+
+3c. DECOMPOSITION REVIEW (internal consistency):
+    - Are the tasks collectively sufficient to satisfy the parent strategic task?
+    - Are dependencies correctly ordered (no circular refs)?
+    - Is there overlap or duplication between tasks?
+    - Maximum 2 retries if issues found. If still failing → mark strategic task
+      BLOCKED with diagnostic note and exit the decomposition.
+
+3d. PLAN COHERENCE CHECK (external validation):
+    - Does the decomposition align with the strategic plan's goals/constraints?
+    - Is it consistent with the bounded context's data model and module definition?
+    - Do naming choices follow PUBLISHED-LANGUAGE.md?
+    - Are cross-context dependencies accounted for?
+    - Does the work fit the project's current phase?
+    Outcomes:
+    - Pass → execute first tactical task immediately
+    - Scope expansion detected → flag in INBOX.md, continue with safe subset
+      (tasks directly implied by the plan). Write excluded tasks as PROPOSED
+      with a note referencing the INBOX flag.
+    - Fundamentally incoherent → mark strategic task BLOCKED, exit BLOCKED
+
+3e. If a tactical task proves more complex than expected during execution,
+    decompose it further into Tier 3 (tertiary) tasks using the same pattern.
+    Three tiers is the maximum — if a fourth level would be needed, mark
+    BLOCKED (the strategic plan was too ambitious for a single task).
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 4 — CODEWRITING LOOP (inner loop for implementation tasks)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+For each tactical or tertiary task that involves code changes:
+
+4a. GENERATE TASK AC
+    Read standing-ac.md (STANDING_AC_FILE from config).
+    Write task-level acceptance criteria as children under the standing AC
+    categories. Record them in the task detail in TODO.md before implementation.
+
+4b. WRITE CODE
+    Read toolchain.md (TOOLCHAIN_FILE from config) for build, test, and
+    capture commands and conventions.
+    Implement the component/hook/screen/query/migration.
+
+4c. CODE REVIEW (mandatory self-review pass)
+    Re-read every file created or modified for this task.
+    Check for: missing imports, wrong variable names, hardcoded values that
+    should reference constants/config, unclosed tags/brackets, incorrect
+    function signatures, props that don't match interfaces, SQL column names
+    that don't match the schema, incorrect platform-specific code.
+    Run the build command from toolchain.md to confirm compilation.
+    Produce an issue list with severity ratings.
+
+4d. CONDITIONAL SECOND PASS
+    If code review found issues:
+    - Fix all issues
+    - Re-run code review
+    If clean (or clean after fix) → continue to UI test.
+
+4e. UI TEST (if applicable — skip for non-UI tasks)
+    Read toolchain.md for the exact serve and capture commands.
+    a. Ensure dev server is running (start command from toolchain).
+       If it fails to start → mark task BLOCKED ("build failed"), exit loop.
+    b. Run the capture/test tool at the viewport specified in toolchain.
+       If the tool crashes → mark task BLOCKED ("UI test infra failure"), exit loop.
+    c. Navigate to the screen under test.
+    d. Two feedback channels:
+       - Visual: screenshot capture → analyse layout/styling
+       - Structural: DOM query via data-testid → assert elements present
+    e. Data verification: query database to confirm data operations if applicable.
+    f. Evaluate against Standing AC + Task AC.
+
+4f. DEBUG PASS (maximum 3 iterations)
+    If failures detected at 4e:
+    - Diagnose: layout error vs logic error vs state error
+    - Fix root cause
+    - Loop back to 4e (UI test)
+    If all acceptance criteria pass:
+    - Task is done — exit codewriting loop, return to task loop step 2d
+    If 3 debug iterations exhausted without passing:
+    - Mark task BLOCKED with diagnostic note listing what was attempted
+    - Write partial CHANGELOG entry noting the attempts
+    - Exit codewriting loop, return to task loop step 2d
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 5 — STATE FILE UPDATES (before exiting)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+5a. Run /compact to free context.
+
+5b. TODO.md: verify all tasks you completed this session show Status: COMPLETE
+    with T-numbers. Ensure any decomposed tasks are written with correct Tier,
+    Parent, Depends, and Status fields.
+
+5c. DECISIONS.md: add D-numbered entries for all choices made this session.
+    Each entry must include: Date, Status (ACTIVE), Context (bounded context
+    code if applicable), Detail, and Alternatives considered.
+
+5d. CHANGELOG.md: add C-numbered entries for all changes made this session.
+    Each entry must include: Date, Task (T-number), Decision (D-numbers if
+    applicable), Type (FEATURE/FIX/REFACTOR/CONFIG/DOCS), Files (list of
+    files touched), Summary.
+
+5e. HANDOVER.md: overwrite with:
+    - What was accomplished (T-numbers completed, D-numbers recorded)
+    - What's next (next eligible task by T-number, brief description)
+    - Gotchas or context the next session needs
+    - Model recommendation: model:effort (default opus:high — only downgrade
+      to sonnet:standard for mechanical tasks like config changes, simple file
+      moves, or status updates)
+    - Note: this was a RECOVERY session — mention any repairs made in Step 0
+
+5f. .orchestra/COMMIT_MSG: write a single-line commit message, max 68 chars.
+    Reference T-numbers where possible. Example:
+    "Build PostCard component with tag display (T042)"
+
+5g. Check if any governance file exceeds its archiving threshold. If so, read
+    the protocol file (TODO_PROTOCOL, DECISIONS_PROTOCOL, or CHANGELOG_PROTOCOL
+    from config) and perform the archive as a housekeeping step.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 6 — EXIT SIGNAL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Your final output line must be EXACTLY one of these three words:
+- HANDOVER — you completed one or more tasks but eligible tasks remain
+- COMPLETE — all tasks in TODO are COMPLETE
+- BLOCKED — you need human input (reason written to INBOX.md and HANDOVER.md)
+PROMPT_EOF
 
 # ─── Main loop ────────────────────────────────────────────────────────────────
 
