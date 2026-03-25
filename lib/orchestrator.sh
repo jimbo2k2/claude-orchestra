@@ -776,26 +776,29 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
     PRE_STATE=$(snapshot_state_files)
 
     # ─── Model selection ─────────────────────────────────────────────────────
-    # Read model recommendation from HANDOVER.md (written by previous session)
-    RECOMMENDED_MODEL=""
+    # v2: Default opus:high. Only downgrade for mechanical tasks.
+    RECOMMENDED_MODEL="opus"
+    RECOMMENDED_EFFORT="high"
+
     if [ -f "$STATE_DIR/HANDOVER.md" ]; then
-        RECOMMENDED_MODEL=$(grep -i 'model recommendation' "$STATE_DIR/HANDOVER.md" \
-            | tail -1 | grep -oi 'opus\|sonnet' || echo "")
+        REC_LINE=$(grep -i 'model recommendation' "$STATE_DIR/HANDOVER.md" | tail -1 || echo "")
+        if echo "$REC_LINE" | grep -qi 'sonnet'; then
+            RECOMMENDED_MODEL="sonnet"
+        fi
+        if echo "$REC_LINE" | grep -qi 'standard'; then
+            RECOMMENDED_EFFORT="standard"
+        fi
     fi
 
-    # Default to sonnet (cheaper), use opus only when explicitly recommended
-    # First session can be overridden via INITIAL_MODEL env var
-    MODEL_FLAG=""
+    # First session override via env var
     if [ "$SESSION_COUNT" -eq 1 ] && [ -n "${INITIAL_MODEL:-}" ]; then
-        MODEL_FLAG="--model ${INITIAL_MODEL}"
+        RECOMMENDED_MODEL="${INITIAL_MODEL}"
         notify "   Model: ${INITIAL_MODEL} (INITIAL_MODEL override)"
-    elif [ "${RECOMMENDED_MODEL,,}" = "opus" ]; then
-        MODEL_FLAG="--model opus"
-        notify "   Model: opus (recommended by previous session)"
-    else
-        MODEL_FLAG="--model sonnet"
-        notify "   Model: sonnet (default)"
     fi
+
+    MODEL_FLAG="--model ${RECOMMENDED_MODEL}"
+    EFFORT_FLAG="--effort ${RECOMMENDED_EFFORT}"
+    notify "   Model: ${RECOMMENDED_MODEL}:${RECOMMENDED_EFFORT}"
 
     # ─── Run Claude Code in headless mode ─────────────────────────────────────
     # stream-json goes to the log file for full metadata;
@@ -804,6 +807,7 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
     set +eo pipefail
     claude -p "$CURRENT_PROMPT" \
         $MODEL_FLAG \
+        $EFFORT_FLAG \
         --output-format stream-json \
         --verbose \
         --dangerously-skip-permissions \
@@ -824,33 +828,31 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
     if [ $EXIT_CODE -ne 0 ]; then
         CONSECUTIVE_CRASHES=$((CONSECUTIVE_CRASHES + 1))
         TOTAL_CRASHES=$((TOTAL_CRASHES + 1))
+        notify "Session $SESSION_COUNT crashed (exit $EXIT_CODE). Consecutive: $CONSECUTIVE_CRASHES/$MAX_CONSECUTIVE_CRASHES"
 
-        notify "Session $SESSION_COUNT crashed (exit code $EXIT_CODE). Consecutive: $CONSECUTIVE_CRASHES/$MAX_CONSECUTIVE_CRASHES"
-
-        # Check if the crashing session managed to update state files
         if state_files_changed "$PRE_STATE"; then
-            notify "   State files were updated — partial work detected"
+            # v2 INVERSION: v1 treated governance-changed as safe (USE_RECOVERY_PROMPT=false).
+            # v2 treats it as needing damage assessment because governance may be
+            # half-written (e.g. task set to IN_PROGRESS but not completed). See spec 6.3.
+            notify "   Governance files changed — partial state, recovery needed"
             recovery_commit "$SESSION_COUNT"
-            USE_RECOVERY_PROMPT=false  # State is consistent, normal prompt is fine
+            USE_RECOVERY_PROMPT=true
         else
-            # State files unchanged — check for staged or unstaged file changes
             STAGED_COUNT=$(git diff --cached --name-only 2>/dev/null | wc -l | tr -d ' ')
             MODIFIED_COUNT=$(git diff --name-only 2>/dev/null | wc -l | tr -d ' ')
-
             if [ "$STAGED_COUNT" -gt 0 ] || [ "$MODIFIED_COUNT" -gt 0 ]; then
-                notify "   No state file updates, but $STAGED_COUNT staged / $MODIFIED_COUNT modified files"
+                notify "   Code files modified without governance update — recovery needed"
                 recovery_commit "$SESSION_COUNT"
-                USE_RECOVERY_PROMPT=true  # State files are stale, recovery prompt needed
+                USE_RECOVERY_PROMPT=true
             else
-                notify "   No work detected from crashed session"
-                USE_RECOVERY_PROMPT=true  # Previous session produced nothing
+                # Nothing changed — session died before acting
+                notify "   No work detected — using normal prompt"
+                USE_RECOVERY_PROMPT=false
             fi
         fi
 
-        # Abort if too many consecutive crashes
         if [ "$CONSECUTIVE_CRASHES" -ge "$MAX_CONSECUTIVE_CRASHES" ]; then
-            notify "$MAX_CONSECUTIVE_CRASHES consecutive crashes. Orchestrator stopping."
-            notify "   Check $LOG_DIR for session logs. Last: $SESSION_LOG"
+            notify "$MAX_CONSECUTIVE_CRASHES consecutive crashes. Stopping."
             exit 1
         fi
 
@@ -888,7 +890,7 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
 
     if echo "$FINAL" | grep -qi "COMPLETE"; then
         # Double-check: does TODO.md actually have no remaining tasks?
-        REMAINING=$(grep -c '^\- \[ \]' "$STATE_DIR/TODO.md" 2>/dev/null) || REMAINING=0
+        REMAINING=$(grep -c 'Status:.*OPEN' "$TODO_FILE" 2>/dev/null) || REMAINING=0
         if [ "$REMAINING" -eq 0 ]; then
             notify "All tasks completed after $SESSION_COUNT sessions! ($TOTAL_CRASHES crashes recovered)"
             exit 0
@@ -904,7 +906,7 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
     fi
 
     # Check TODO.md for remaining tasks (source of truth, regardless of signal)
-    REMAINING=$(grep -c '^\- \[ \]' "$STATE_DIR/TODO.md" 2>/dev/null) || REMAINING=0
+    REMAINING=$(grep -c 'Status:.*OPEN' "$TODO_FILE" 2>/dev/null) || REMAINING=0
 
     if [ "$REMAINING" -eq 0 ]; then
         notify "No remaining tasks in .orchestra/TODO.md after $SESSION_COUNT sessions."
@@ -917,6 +919,6 @@ done
 
 # ─── Max sessions reached ─────────────────────────────────────────────────────
 
-REMAINING=$(grep -c '^\- \[ \]' "$STATE_DIR/TODO.md" 2>/dev/null) || REMAINING=0
+REMAINING=$(grep -c 'Status:.*OPEN' "$TODO_FILE" 2>/dev/null) || REMAINING=0
 notify "Reached max session limit ($MAX_SESSIONS). $REMAINING tasks remain. $TOTAL_CRASHES crashes recovered."
 exit 3
