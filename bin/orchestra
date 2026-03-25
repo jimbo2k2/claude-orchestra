@@ -55,6 +55,58 @@ die() {
     exit 1
 }
 
+# ─── Governance scanning helpers ─────────────────────────────────────────────
+
+scan_governance_dir() {
+    local dir="$1"
+    local prefix="$2"
+    local main_file="$3"
+
+    if [ ! -d "$dir" ]; then
+        echo "NOT_FOUND"
+        return
+    fi
+
+    local has_main=false has_protocol=false has_archive=false has_numbers=false
+
+    [ -f "$dir/$main_file" ] && has_main=true
+    [ -f "$dir/CLAUDE.md" ] && has_protocol=true
+    [ -d "$dir/archive" ] && has_archive=true
+
+    if [ "$has_main" = true ] && grep -qE "${prefix}[0-9]{3,}" "$dir/$main_file" 2>/dev/null; then
+        has_numbers=true
+    fi
+
+    if [ "$has_main" = true ] && [ "$has_protocol" = true ] && [ "$has_archive" = true ] && [ "$has_numbers" = true ]; then
+        echo "MATCH"
+    elif [ "$has_main" = true ] || compgen -G "$dir/*.md" > /dev/null 2>&1; then
+        echo "CONFLICT"
+    else
+        echo "NOT_FOUND"
+    fi
+}
+
+resolve_conflict() {
+    local artifact_name="$1"
+    local dir="$2"
+
+    echo ""
+    echo "  WARNING: Found existing $artifact_name structure in $dir"
+    echo "  but it doesn't match the expected numbered/archivable format."
+    echo ""
+    echo "  Options:"
+    echo "    adopt  — Migrate to numbered format (creates archive/ and CLAUDE.md)"
+    echo "    point  — Use as-is (orchestra reads but may not write correctly)"
+    echo "    skip   — Don't manage $artifact_name through orchestra"
+    echo ""
+    read -rp "  Choice [adopt/point/skip]: " choice
+
+    case "${choice,,}" in
+        adopt|point|skip) echo "$choice" ;;
+        *) echo "skip" ;;
+    esac
+}
+
 # ─── init ─────────────────────────────────────────────────────────────────────
 
 cmd_init() {
@@ -63,51 +115,123 @@ cmd_init() {
 
     local orchestra_dir="$target_dir/.orchestra"
 
-    if [ -d "$orchestra_dir" ]; then
+    if [ -d "$orchestra_dir" ] && [ -f "$orchestra_dir/config" ]; then
         die ".orchestra/ already exists in $target_dir. Use 'orchestra reset' to start fresh."
     fi
 
-    echo "Initialising orchestra in $target_dir"
+    echo "Initialising orchestra v2 in $target_dir"
 
-    # Create .orchestra/ with state files
+    local config_lines=""
+
+    local -a ARTIFACTS=(
+        "TODO:T:TODO:TODO.md:TODO"
+        "DECISIONS:D:Decisions:DECISIONS.md:DECISIONS"
+        "CHANGELOG:C:Changelog:CHANGELOG.md:CHANGELOG"
+    )
+
+    for artifact_spec in "${ARTIFACTS[@]}"; do
+        IFS=: read -r art_name art_prefix search_dir main_file tpl_prefix <<< "$artifact_spec"
+
+        local result="NOT_FOUND"
+        local found_dir=""
+
+        if [ -d "$target_dir/$search_dir" ]; then
+            result=$(scan_governance_dir "$target_dir/$search_dir" "$art_prefix" "$main_file")
+            found_dir="$target_dir/$search_dir"
+        fi
+
+        case "$result" in
+            MATCH)
+                echo "   $art_name: inherited from $found_dir"
+                config_lines="${config_lines}${art_name}_FILE=${search_dir}/${main_file}\n"
+                config_lines="${config_lines}${art_name}_PROTOCOL=${search_dir}/CLAUDE.md\n"
+                ;;
+            CONFLICT)
+                local choice
+                choice=$(resolve_conflict "$art_name" "$found_dir")
+                case "$choice" in
+                    adopt)
+                        mkdir -p "$found_dir/archive"
+                        if [ ! -f "$found_dir/CLAUDE.md" ]; then
+                            cp "$TEMPLATE_DIR/governance/${tpl_prefix}-CLAUDE.md" "$found_dir/CLAUDE.md"
+                        fi
+                        echo "   $art_name: adopted existing structure in $found_dir"
+                        config_lines="${config_lines}${art_name}_FILE=${search_dir}/${main_file}\n"
+                        config_lines="${config_lines}${art_name}_PROTOCOL=${search_dir}/CLAUDE.md\n"
+                        ;;
+                    point)
+                        echo "   $art_name: pointing to existing file (manual compatibility)"
+                        config_lines="${config_lines}${art_name}_FILE=${search_dir}/${main_file}\n"
+                        config_lines="${config_lines}${art_name}_PROTOCOL=\n"
+                        ;;
+                    skip)
+                        echo "   $art_name: skipped (not managed by orchestra)"
+                        config_lines="${config_lines}${art_name}_FILE=\n"
+                        config_lines="${config_lines}${art_name}_PROTOCOL=\n"
+                        ;;
+                esac
+                ;;
+            NOT_FOUND)
+                local new_dir="$target_dir/$search_dir"
+                mkdir -p "$new_dir/archive"
+                cp "$TEMPLATE_DIR/governance/${tpl_prefix}.md" "$new_dir/$main_file"
+                cp "$TEMPLATE_DIR/governance/${tpl_prefix}-CLAUDE.md" "$new_dir/CLAUDE.md"
+                echo "   $art_name: created $search_dir/ with templates"
+                config_lines="${config_lines}${art_name}_FILE=${search_dir}/${main_file}\n"
+                config_lines="${config_lines}${art_name}_PROTOCOL=${search_dir}/CLAUDE.md\n"
+                ;;
+        esac
+    done
+
     mkdir -p "$orchestra_dir/session-logs" "$orchestra_dir/archive"
 
-    for f in PLAN.md TODO.md CHANGELOG.md HANDOVER.md INBOX.md DECISIONS.md; do
+    cat > "$orchestra_dir/config" << CONFIGEOF
+# .orchestra/config — Orchestra v2 configuration
+# Paths are relative to project root.
+
+# Governance file locations
+$(echo -e "$config_lines")
+# Strategic plan for current build (set before orchestra run)
+PLAN_FILE=
+
+# Toolchain (stack-specific build/test commands)
+TOOLCHAIN_FILE=.orchestra/toolchain.md
+
+# Standing acceptance criteria
+STANDING_AC_FILE=.orchestra/standing-ac.md
+CONFIGEOF
+    echo "   Created .orchestra/config"
+
+    for f in HANDOVER.md INBOX.md; do
         if [ -f "$TEMPLATE_DIR/$f" ]; then
             cp "$TEMPLATE_DIR/$f" "$orchestra_dir/$f"
-        else
-            die "Template $f not found in $TEMPLATE_DIR"
         fi
     done
-    echo "   Created .orchestra/ with state files"
 
-    # Handle CLAUDE.md
+    cp "$TEMPLATE_DIR/toolchain.md" "$orchestra_dir/toolchain.md"
+    cp "$TEMPLATE_DIR/standing-ac.md" "$orchestra_dir/standing-ac.md"
+    echo "   Created .orchestra/ with operational files, toolchain, standing AC"
+
     if [ -f "$target_dir/CLAUDE.md" ]; then
-        # Check if workflow section already exists
         if grep -q "## Multi-Session Autonomous Workflow" "$target_dir/CLAUDE.md" 2>/dev/null; then
             echo "   CLAUDE.md already has workflow section — skipping"
         else
-            # Append workflow section from the workflow-only template
             if [ -f "$TEMPLATE_DIR/CLAUDE-workflow.md" ]; then
                 echo "" >> "$target_dir/CLAUDE.md"
                 cat "$TEMPLATE_DIR/CLAUDE-workflow.md" >> "$target_dir/CLAUDE.md"
                 echo "   Appended workflow section to existing CLAUDE.md"
-            else
-                echo "   WARNING: CLAUDE-workflow.md template not found — add workflow section manually"
             fi
         fi
     else
-        # No CLAUDE.md — copy the full template
         if [ -f "$TEMPLATE_DIR/CLAUDE.md" ]; then
             cp "$TEMPLATE_DIR/CLAUDE.md" "$target_dir/CLAUDE.md"
             echo "   Created CLAUDE.md from template"
         fi
     fi
 
-    # Handle .claude/settings.json
     local claude_dir="$target_dir/.claude"
     if [ -f "$claude_dir/settings.json" ]; then
-        echo "   .claude/settings.json already exists — not overwriting (check hooks manually)"
+        echo "   .claude/settings.json exists — not overwriting (check hooks manually)"
     else
         mkdir -p "$claude_dir"
         if [ -f "$TEMPLATE_DIR/settings.json" ]; then
@@ -116,7 +240,6 @@ cmd_init() {
         fi
     fi
 
-    # Initialise git repo if needed
     if ! git -C "$target_dir" rev-parse --show-toplevel &>/dev/null; then
         git -C "$target_dir" init
         echo "   Initialised git repository"
@@ -124,10 +247,11 @@ cmd_init() {
 
     echo ""
     echo "Done! Next steps:"
-    echo "  1. Edit .orchestra/PLAN.md with your project plan"
-    echo "  2. Edit .orchestra/TODO.md with your task list"
-    echo "  3. Customise CLAUDE.md for your project"
-    echo "  4. Run: orchestra run"
+    echo "  1. Write a strategic plan and set PLAN_FILE in .orchestra/config"
+    echo "  2. Add T-numbered tasks to your TODO file"
+    echo "  3. Review .orchestra/toolchain.md and .orchestra/standing-ac.md"
+    echo "  4. Customise CLAUDE.md for your project"
+    echo "  5. Run: orchestra run"
 }
 
 # ─── run ──────────────────────────────────────────────────────────────────────
