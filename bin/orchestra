@@ -354,57 +354,58 @@ cmd_reset() {
 cmd_status() {
     local project_dir
     project_dir="$(git rev-parse --show-toplevel 2>/dev/null)" || die "Not in a git repository"
-    local orchestra_dir="$project_dir/.orchestra"
 
-    if [ ! -d "$orchestra_dir" ]; then
-        die ".orchestra/ not found. Run 'orchestra init' first."
-    fi
+    [ -d "$project_dir/.orchestra" ] || die ".orchestra/ not found. Run 'orchestra init' first."
 
-    echo "=== Orchestra Status ==="
+    source "$LIB_DIR/config.sh"
+    load_orchestra_config "$project_dir" || die "Failed to load .orchestra/config"
+
+    echo "=== Orchestra v2 Status ==="
     echo ""
 
-    # Tasks
-    local total=0 done=0 remaining=0
-    if [ -f "$orchestra_dir/TODO.md" ]; then
-        total=$(grep -c '^\- \[' "$orchestra_dir/TODO.md" 2>/dev/null) || total=0
-        done=$(grep -c '^\- \[x\]' "$orchestra_dir/TODO.md" 2>/dev/null) || done=0
-        remaining=$(grep -c '^\- \[ \]' "$orchestra_dir/TODO.md" 2>/dev/null) || remaining=0
+    if [ -f "$TODO_FILE" ]; then
+        local total open in_progress complete blocked proposed
+        total=$(grep -c '^### T[0-9]' "$TODO_FILE" 2>/dev/null) || total=0
+        open=$(grep -c 'Status:.*OPEN' "$TODO_FILE" 2>/dev/null) || open=0
+        in_progress=$(grep -c 'Status:.*IN_PROGRESS' "$TODO_FILE" 2>/dev/null) || in_progress=0
+        complete=$(grep -c 'Status:.*COMPLETE' "$TODO_FILE" 2>/dev/null) || complete=0
+        blocked=$(grep -c 'Status:.*BLOCKED' "$TODO_FILE" 2>/dev/null) || blocked=0
+        proposed=$(grep -c 'Status:.*PROPOSED' "$TODO_FILE" 2>/dev/null) || proposed=0
+        echo "Tasks: $complete/$total complete | $open open | $in_progress in progress | $blocked blocked | $proposed proposed"
+    else
+        echo "Tasks: (TODO file not found at $TODO_FILE)"
     fi
-    echo "Tasks: $done/$total complete ($remaining remaining)"
 
-    # Sessions logged
+    if [ -f "$DECISIONS_FILE" ]; then
+        local d_count
+        d_count=$(grep -c '^### D[0-9]' "$DECISIONS_FILE" 2>/dev/null) || d_count=0
+        echo "Decisions: $d_count current"
+    fi
+
+    if [ -f "$CHANGELOG_FILE" ]; then
+        local c_count
+        c_count=$(grep -c '^### C[0-9]' "$CHANGELOG_FILE" 2>/dev/null) || c_count=0
+        echo "Changelog: $c_count current entries"
+    fi
+
     local session_count=0
-    if [ -d "$orchestra_dir/session-logs" ]; then
-        session_count=$(ls "$orchestra_dir/session-logs/"*.json 2>/dev/null | wc -l | tr -d ' ')
+    if [ -d "$project_dir/.orchestra/session-logs" ]; then
+        session_count=$(ls "$project_dir/.orchestra/session-logs/"*.json 2>/dev/null | wc -l | tr -d ' ')
     fi
     echo "Sessions: $session_count logged"
 
-    # Archived plans
-    local archive_count=0
-    if [ -d "$orchestra_dir/archive" ]; then
-        archive_count=$(ls -d "$orchestra_dir/archive/"[0-9][0-9][0-9]-*/ 2>/dev/null | wc -l | tr -d ' ')
-    fi
-    echo "Archived plans: $archive_count"
-
-    # Plan objective
     echo ""
-    if [ -f "$orchestra_dir/PLAN.md" ]; then
-        local objective
-        objective=$(sed -n '/^## Objective/{n;/^$/d;p;}' "$orchestra_dir/PLAN.md" | head -3)
-        if [ -n "$objective" ] && ! echo "$objective" | grep -q '^<!--'; then
-            echo "Plan: $objective"
-        else
-            echo "Plan: (no objective set)"
-        fi
+    if [ -n "${PLAN_FILE:-}" ] && [ -f "$PLAN_FILE" ]; then
+        echo "Plan: $PLAN_FILE"
+        head -5 "$PLAN_FILE" | sed 's/^/  /'
     else
-        echo "Plan: (no PLAN.md)"
+        echo "Plan: (not set)"
     fi
 
-    # Last handover
     echo ""
-    if [ -f "$orchestra_dir/HANDOVER.md" ]; then
+    if [ -f "$project_dir/.orchestra/HANDOVER.md" ]; then
         echo "Last handover:"
-        head -15 "$orchestra_dir/HANDOVER.md" | sed 's/^/  /'
+        head -15 "$project_dir/.orchestra/HANDOVER.md" | sed 's/^/  /'
     fi
 }
 
