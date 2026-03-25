@@ -257,7 +257,6 @@ CONFIGEOF
 # ─── run ──────────────────────────────────────────────────────────────────────
 
 cmd_run() {
-    # Validate we're in a project with .orchestra/
     local project_dir
     project_dir="$(git rev-parse --show-toplevel 2>/dev/null)" || die "Not in a git repository"
 
@@ -269,7 +268,15 @@ cmd_run() {
         die "CLAUDE.md not found in project root."
     fi
 
-    # Set STATE_DIR for the lib scripts and exec the orchestrator
+    # Source config reader and load config
+    source "$LIB_DIR/config.sh"
+    load_orchestra_config "$project_dir" || die "Failed to load .orchestra/config"
+
+    # Pre-flight checks
+    preflight_check || die "Pre-flight checks failed. Fix the errors above and retry."
+    check_eligible_tasks || die "Pre-flight: no eligible tasks."
+
+    # Lockfile is acquired inside orchestrator.sh (after trap is set) to ensure cleanup.
     export STATE_DIR="$project_dir/.orchestra"
     exec bash "$LIB_DIR/orchestrator.sh"
 }
