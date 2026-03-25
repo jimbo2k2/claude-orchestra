@@ -1,6 +1,6 @@
 # Project: claude-orchestra
 
-Autonomous multi-session orchestrator for Claude Code.
+Autonomous multi-session orchestrator for Claude Code (v2).
 
 ## Tech Stack
 - Runtime: Bash (POSIX-compatible where possible)
@@ -20,9 +20,16 @@ templates/
 ├── CLAUDE.md              — Full project template (new projects)
 ├── CLAUDE-workflow.md     — Workflow section only (existing projects)
 ├── settings.json          — .claude/settings.json template
-├── PLAN.md, TODO.md, CHANGELOG.md, HANDOVER.md, INBOX.md, DECISIONS.md
+├── settings-autonomous.json — Autonomous-mode settings template
+├── config                 — .orchestra/config template
+├── toolchain.md           — .orchestra/toolchain.md template
+├── standing-ac.md         — .orchestra/standing-ac.md template
+├── governance/            — Governance file templates (TODO, DECISIONS, CHANGELOG + CLAUDE.md protocols)
+├── HANDOVER.md, INBOX.md  — Session state templates
 examples/
 └── test-orchestrator/     — Self-contained test fixture
+docs/
+└── orchestra-v2-spec.md   — Full v2 design specification
 install.sh                 — Installs to ~/claude-scripts/
 ```
 
@@ -34,7 +41,31 @@ install.sh                 — Installs to ~/claude-scripts/
 - Hook scripts reference `~/claude-scripts/` as the installed path
 
 ## Key Concepts
-- **STATE_DIR**: Always `$PROJECT_DIR/.orchestra` — all state file paths use this
-- **Hook scripts** (lib/): Read from stdin or env vars, never hardcode project paths
-- **Templates**: Copied by `orchestra init`, all state file references use `.orchestra/` prefix
-- **CLAUDE-workflow.md**: The workflow section only, for appending to existing CLAUDE.md files
+
+### Config-driven governance
+Governance file paths are defined in `.orchestra/config`, not hardcoded. Projects can point Orchestra at their existing file structure:
+- `TODO_FILE` / `TODO_PROTOCOL` — task backlog and its archiving protocol
+- `DECISIONS_FILE` / `DECISIONS_PROTOCOL` — decision log and protocol
+- `CHANGELOG_FILE` / `CHANGELOG_PROTOCOL` — changelog and protocol
+- `PLAN_FILE` — strategic plan for the current build
+- `TOOLCHAIN_FILE` — stack-specific build/test commands
+- `STANDING_AC_FILE` — acceptance criteria for every UI task
+
+### Three-tier planning
+Tasks use T-numbers and have a tier (1=Strategic, 2=Tactical, 3=Tertiary). Strategic tasks are decomposed into tactical sub-tasks. Tactical tasks are executed via the codewriting loop.
+
+### Governance triad
+Three numbered, archivable files form the governance system:
+- **TODO** (T-numbers) — tasks with status, tier, dependencies
+- **DECISIONS** (D-numbers) — choices with alternatives considered
+- **CHANGELOG** (C-numbers) — what changed, linked to tasks and decisions
+
+### Session state
+- **HANDOVER.md** — overwritten each session; carries context to the next session
+- **INBOX.md** — human writes async messages, Claude reads at session start
+
+### Exit signals
+Sessions end with exactly one of: `HANDOVER`, `COMPLETE`, or `BLOCKED`.
+
+### Ubiquitous language
+See `docs/orchestra-v2-spec.md` for the full v2 ubiquitous language table defining terms like Strategic Task, Tactical Task, Governance Triad, Codewriting Loop, Standing AC, Toolchain, Pre-flight Check, Capacity Check, and more.
