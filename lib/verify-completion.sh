@@ -26,6 +26,13 @@ fi
 PROJECT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 STATE_DIR="${STATE_DIR:-${PROJECT_DIR}/.orchestra}"
 
+# ─── Load config for governance file paths ──────────────────────────────────
+SCRIPT_DIR_HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR_HOOK/config.sh" ]; then
+    source "$SCRIPT_DIR_HOOK/config.sh"
+    load_orchestra_config "$PROJECT_DIR" 2>/dev/null || true
+fi
+
 # ─── Gather context for the verifier ─────────────────────────────────────────
 
 TODO_CONTENT=""
@@ -33,8 +40,8 @@ HANDOVER_CONTENT=""
 ACCEPTANCE_CRITERIA=""
 TEST_RESULT=""
 
-if [ -f "$STATE_DIR/TODO.md" ]; then
-    TODO_CONTENT=$(head -100 "$STATE_DIR/TODO.md")
+if [ -n "${TODO_FILE:-}" ] && [ -f "$TODO_FILE" ]; then
+    TODO_CONTENT=$(head -100 "$TODO_FILE")
 fi
 
 if [ -f "$STATE_DIR/HANDOVER.md" ]; then
@@ -86,11 +93,13 @@ Unstaged file changes: ${UNSTAGED:-none}
 Test runner available: $TEST_RUNNER
 
 Check these criteria:
-1. Has at least one TODO item been checked off OR has meaningful progress been made?
+1. Has at least one T-numbered task been updated (status changed to COMPLETE or IN_PROGRESS)?
 2. Does HANDOVER.md contain useful context (not empty or boilerplate)?
 3. Are there unstaged changes that should have been committed?
 4. If the session claims COMPLETE, are all TODO items actually checked off?
 5. If the session claims COMPLETE and acceptance criteria exist, does the work appear to satisfy them?
+6. Does CHANGELOG show a new C-numbered entry from this session?
+7. If decisions were made, does DECISIONS show new D-numbered entries?
 
 Respond with ONLY a JSON object, no other text:
 {
