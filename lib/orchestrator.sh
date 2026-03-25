@@ -46,8 +46,12 @@ LOG_DIR="${LOG_DIR:-${STATE_DIR}/session-logs}"
 cd "$PROJECT_DIR"
 mkdir -p "$LOG_DIR"
 
-# ─── Pre-flight checks ───────────────────────────────────────────────────────
+# ─── Load config ────────────────────────────────────────────────────────────
+SCRIPT_DIR_ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR_ORCH/config.sh"
+load_orchestra_config "$PROJECT_DIR" || exit 1
 
+# ─── Pre-flight checks ─────────────────────────────────────────────────────
 if ! command -v claude &>/dev/null; then
     echo "ERROR: Claude Code CLI not found. Install with: npm install -g @anthropic-ai/claude-code"
     exit 1
@@ -58,29 +62,25 @@ if ! command -v jq &>/dev/null; then
     exit 1
 fi
 
-if [ ! -d "$STATE_DIR" ]; then
-    echo "ERROR: .orchestra/ directory not found. Run 'orchestra init' first."
-    exit 1
-fi
+preflight_check || exit 1
+check_eligible_tasks || exit 1
 
-for STATE_FILE in PLAN.md TODO.md CHANGELOG.md HANDOVER.md INBOX.md; do
-    if [ ! -f "$STATE_DIR/$STATE_FILE" ]; then
-        echo "ERROR: $STATE_FILE not found in .orchestra/. Run 'orchestra init' or create it manually."
+# ─── Lockfile ───────────────────────────────────────────────────────────────
+LOCKFILE="$STATE_DIR/orchestra.lock"
+cleanup_lock() { rm -f "$LOCKFILE"; }
+
+if [ -f "$LOCKFILE" ]; then
+    LOCK_PID=$(cat "$LOCKFILE" 2>/dev/null)
+    if [ -n "$LOCK_PID" ] && kill -0 "$LOCK_PID" 2>/dev/null; then
+        echo "ERROR: Another orchestrator is already running (PID $LOCK_PID)." >&2
+        echo "If stale, delete $LOCKFILE" >&2
         exit 1
+    else
+        echo "WARNING: Stale lockfile (PID $LOCK_PID not running). Removing."
+        rm -f "$LOCKFILE"
     fi
-done
-
-if [ ! -f "$PROJECT_DIR/CLAUDE.md" ]; then
-    echo "ERROR: CLAUDE.md not found in project root."
-    exit 1
 fi
-
-# Check TODO.md actually has tasks
-INITIAL_TASKS=$(grep -c '^\- \[ \]' "$STATE_DIR/TODO.md" 2>/dev/null) || INITIAL_TASKS=0
-if [ "$INITIAL_TASKS" -eq 0 ]; then
-    echo "ERROR: No incomplete tasks in .orchestra/TODO.md. Add tasks before starting."
-    exit 1
-fi
+echo $$ > "$LOCKFILE"
 
 # ─── Notification helper ─────────────────────────────────────────────────────
 
@@ -123,9 +123,10 @@ restore_settings() {
 
 snapshot_state_files() {
     STATE_SNAPSHOT=""
-    for f in TODO.md CHANGELOG.md HANDOVER.md; do
-        if [ -f "$STATE_DIR/$f" ]; then
-            STATE_SNAPSHOT="$STATE_SNAPSHOT$(md5sum "$STATE_DIR/$f")"
+    # Checksum governance files + HANDOVER (HANDOVER included for stall detection)
+    for f in "$TODO_FILE" "$DECISIONS_FILE" "$CHANGELOG_FILE" "$STATE_DIR/HANDOVER.md"; do
+        if [ -f "$f" ]; then
+            STATE_SNAPSHOT="$STATE_SNAPSHOT$(md5sum "$f")"
         fi
     done
     echo "$STATE_SNAPSHOT"
@@ -143,23 +144,19 @@ state_files_changed() {
 
 recovery_commit() {
     local session_num="$1"
-
-    # Stage any modified tracked files (catches PostToolUse staged files
-    # plus any state file updates Claude made before crashing)
     git add -u 2>/dev/null || true
-
-    # Also stage state files explicitly
-    for f in TODO.md CHANGELOG.md HANDOVER.md DECISIONS.md INBOX.md; do
-        [ -f "$STATE_DIR/$f" ] && git add ".orchestra/$f" 2>/dev/null || true
+    # Stage governance files from config paths
+    for f in "$TODO_FILE" "$DECISIONS_FILE" "$CHANGELOG_FILE"; do
+        [ -f "$f" ] && git add "$f" 2>/dev/null || true
     done
-
+    # Stage operational files
+    for f in HANDOVER.md INBOX.md; do
+        [ -f "$STATE_DIR/$f" ] && git add "$STATE_DIR/$f" 2>/dev/null || true
+    done
     if ! git diff --cached --quiet 2>/dev/null; then
-        git commit -m "auto: recovery commit after session $session_num crash
-
-This commit captures work from a session that exited abnormally.
-Some changes may be incomplete. Check .orchestra/HANDOVER.md for context.
-Time: $(date -u +%Y-%m-%dT%H:%M:%SZ)" --no-verify 2>/dev/null || true
-
+        # --no-verify is intentional: recovery commits bypass hooks to avoid
+        # recursive verification (verify-completion.sh would trigger on the commit)
+        git commit -m "auto: recovery commit after session $session_num crash" --no-verify 2>/dev/null || true
         notify "Recovery commit saved work from crashed session $session_num"
         return 0
     fi
@@ -367,7 +364,7 @@ stop_ram_monitor() {
     fi
 }
 
-trap 'stop_ram_monitor; restore_settings' EXIT
+trap 'stop_ram_monitor; restore_settings; cleanup_lock' EXIT
 start_ram_monitor
 
 # ─── Main loop state ─────────────────────────────────────────────────────────
@@ -380,7 +377,8 @@ USE_RECOVERY_PROMPT=false
 
 notify "Orchestrator started at $START_TIME"
 notify "   Project: $(basename "$PROJECT_DIR")"
-notify "   Tasks: $INITIAL_TASKS incomplete in .orchestra/TODO.md"
+INITIAL_OPEN=$(grep -c 'Status:.*OPEN' "$TODO_FILE" 2>/dev/null) || INITIAL_OPEN=0
+notify "   Tasks: $INITIAL_OPEN open in $TODO_FILE"
 notify "   Max sessions: $MAX_SESSIONS | Max consecutive crashes: $MAX_CONSECUTIVE_CRASHES"
 
 while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
