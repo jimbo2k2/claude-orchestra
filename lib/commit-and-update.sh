@@ -1,10 +1,7 @@
 #!/bin/bash
-# commit-and-update.sh — Stop hook
-# Fires when Claude finishes responding. Commits any staged changes.
-#
-# This runs AFTER verify-completion.sh (hooks execute in order).
-# By this point, verification has either passed or forced Claude to
-# continue working. If we reach here, the work unit is done.
+# commit-and-update.sh — Stop hook (v2)
+# Fires when Claude finishes responding. Makes a single commit
+# containing both code changes and governance file updates.
 
 PROJECT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 STATE_DIR="${STATE_DIR:-${PROJECT_DIR}/.orchestra}"
@@ -13,7 +10,28 @@ TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 cd "$PROJECT_DIR"
 
-# Only commit if there are staged changes
+# Load config for governance file paths
+SCRIPT_DIR_HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR_HOOK/config.sh" ]; then
+    source "$SCRIPT_DIR_HOOK/config.sh"
+    load_orchestra_config "$PROJECT_DIR" 2>/dev/null || true
+fi
+
+# Stage governance files from config paths
+for gov_file in "${TODO_FILE:-}" "${DECISIONS_FILE:-}" "${CHANGELOG_FILE:-}"; do
+    if [ -n "$gov_file" ] && [ -f "$gov_file" ]; then
+        git diff --quiet "$gov_file" 2>/dev/null || git add "$gov_file" 2>/dev/null || true
+    fi
+done
+
+# Stage operational files
+for op_file in HANDOVER.md INBOX.md; do
+    if [ -f "$STATE_DIR/$op_file" ]; then
+        git diff --quiet "$STATE_DIR/$op_file" 2>/dev/null || git add "$STATE_DIR/$op_file" 2>/dev/null || true
+    fi
+done
+
+# Single commit: code + governance together
 if ! git diff --cached --quiet 2>/dev/null; then
     CHANGED_FILES=$(git diff --cached --name-only | head -20)
     FILE_COUNT=$(git diff --cached --name-only | wc -l | tr -d ' ')
@@ -23,10 +41,7 @@ if ! git diff --cached --quiet 2>/dev/null; then
     if [ -f "$STATE_DIR/COMMIT_MSG" ]; then
         TASK_SUMMARY=$(head -c 68 "$STATE_DIR/COMMIT_MSG" | tr -d '\n')
     fi
-
-    if [ -z "$TASK_SUMMARY" ]; then
-        TASK_SUMMARY="session update ($FILE_COUNT files)"
-    fi
+    [ -z "$TASK_SUMMARY" ] && TASK_SUMMARY="session update ($FILE_COUNT files)"
 
     COMMIT_MSG="auto: $TASK_SUMMARY
 
@@ -35,30 +50,11 @@ Time: $TIMESTAMP
 Files changed: $FILE_COUNT
 $CHANGED_FILES"
 
+    # --no-verify: avoid recursive hook invocation
     git commit -m "$COMMIT_MSG" --no-verify 2>/dev/null || true
 fi
 
-# Also stage and commit state files if they've changed
-# Clean up COMMIT_MSG after use (it's per-session, not a persistent state file)
+# Clean up COMMIT_MSG (per-session, not persistent)
 rm -f "$STATE_DIR/COMMIT_MSG"
-
-for STATE_FILE in TODO.md CHANGELOG.md HANDOVER.md DECISIONS.md INBOX.md; do
-    if [ -f "$STATE_DIR/$STATE_FILE" ]; then
-        if ! git diff --quiet "$STATE_DIR/$STATE_FILE" 2>/dev/null; then
-            git add "$STATE_DIR/$STATE_FILE"
-        fi
-    fi
-done
-
-if ! git diff --cached --quiet 2>/dev/null; then
-    git commit -m "auto: state files update
-
-Session: $SESSION_ID
-Time: $TIMESTAMP" --no-verify 2>/dev/null || true
-fi
-
-# Push to remote if configured (Gitea, GitHub, etc.)
-# Uncomment the following line once your remote is set up:
-# git push origin HEAD 2>/dev/null || true
 
 exit 0
