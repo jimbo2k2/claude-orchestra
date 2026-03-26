@@ -8,16 +8,6 @@
 
 ## Current Entries
 
-<!-- Add entries below using the format:
-
-### C001: Short description of change
-- **Date:** YYYY-MM-DD
-- **Task:** TXXXX
-- **Decision:** DXXXX (if applicable)
-- **Type:** FEATURE | FIX | REFACTOR | CONFIG | DOCS
-- **Files:** path/to/file1, path/to/file2
-- **Summary:** What changed and why.
-
--->
+<!-- Add entries below. Format: see Changelog/CLAUDE.md for the full entry template. -->
 
 <!-- Next number: C001 -->

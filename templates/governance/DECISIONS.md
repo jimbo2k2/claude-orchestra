@@ -8,15 +8,6 @@
 
 ## Current Decisions
 
-<!-- Add decisions below using the format:
-
-### D001: Decision title
-- **Date:** YYYY-MM-DD
-- **Status:** ACTIVE
-- **Context:**
-- **Detail:** What was decided and why.
-- **Alternatives considered:** What else was considered and why it was rejected.
-
--->
+<!-- Add decisions below. Format: see Decisions/CLAUDE.md for the full entry template. -->
 
 <!-- Next number: D001 -->

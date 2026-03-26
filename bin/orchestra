@@ -365,12 +365,12 @@ cmd_status() {
 
     if [ -f "$TODO_FILE" ]; then
         local total open in_progress complete blocked proposed
-        total=$(grep -c '^### T[0-9]' "$TODO_FILE" 2>/dev/null) || total=0
-        open=$(grep -c 'Status:.*OPEN' "$TODO_FILE" 2>/dev/null) || open=0
-        in_progress=$(grep -c 'Status:.*IN_PROGRESS' "$TODO_FILE" 2>/dev/null) || in_progress=0
-        complete=$(grep -c 'Status:.*COMPLETE' "$TODO_FILE" 2>/dev/null) || complete=0
-        blocked=$(grep -c 'Status:.*BLOCKED' "$TODO_FILE" 2>/dev/null) || blocked=0
-        proposed=$(grep -c 'Status:.*PROPOSED' "$TODO_FILE" 2>/dev/null) || proposed=0
+        total=$(grep -c '^### T[0-9]' "$TODO_FILE" || true)
+        open=$(grep -c 'Status:.*OPEN' "$TODO_FILE" || true)
+        in_progress=$(grep -c 'Status:.*IN_PROGRESS' "$TODO_FILE" || true)
+        complete=$(grep -c 'Status:.*COMPLETE' "$TODO_FILE" || true)
+        blocked=$(grep -c 'Status:.*BLOCKED' "$TODO_FILE" || true)
+        proposed=$(grep -c 'Status:.*PROPOSED' "$TODO_FILE" || true)
         echo "Tasks: $complete/$total complete | $open open | $in_progress in progress | $blocked blocked | $proposed proposed"
     else
         echo "Tasks: (TODO file not found at $TODO_FILE)"
@@ -378,19 +378,19 @@ cmd_status() {
 
     if [ -f "$DECISIONS_FILE" ]; then
         local d_count
-        d_count=$(grep -c '^### D[0-9]' "$DECISIONS_FILE" 2>/dev/null) || d_count=0
+        d_count=$(grep -c '^### D[0-9]' "$DECISIONS_FILE" || true)
         echo "Decisions: $d_count current"
     fi
 
     if [ -f "$CHANGELOG_FILE" ]; then
         local c_count
-        c_count=$(grep -c '^### C[0-9]' "$CHANGELOG_FILE" 2>/dev/null) || c_count=0
+        c_count=$(grep -c '^### C[0-9]' "$CHANGELOG_FILE" || true)
         echo "Changelog: $c_count current entries"
     fi
 
     local session_count=0
     if [ -d "$project_dir/.orchestra/session-logs" ]; then
-        session_count=$(ls "$project_dir/.orchestra/session-logs/"*.json 2>/dev/null | wc -l | tr -d ' ')
+        session_count=$(find "$project_dir/.orchestra/session-logs" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')
     fi
     echo "Sessions: $session_count logged"
 
