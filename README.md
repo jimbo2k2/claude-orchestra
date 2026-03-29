@@ -1,26 +1,27 @@
 # claude-orchestra
 
-Autonomous multi-session orchestrator for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Runs Claude in headless mode across multiple sessions, each completing one task from a shared backlog — with crash recovery, automatic git commits, and work verification.
+Autonomous multi-session orchestrator for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Runs Claude in headless mode across multiple sessions using three-tier planning, DDD-style governance, and config-driven project integration — with crash recovery, automatic git commits, and work verification.
 
 ## How it works
 
-Orchestra manages a loop:
+Orchestra manages a session loop with structured governance:
 
 1. Spawns a Claude Code session in `--print` mode
-2. Claude reads state files from `.orchestra/`, picks up the next task
-3. Claude completes the task, updates state files, outputs an exit signal
-4. Orchestra commits the work, checks for remaining tasks, spawns the next session
+2. Claude reads governance files (TODO, DECISIONS, CHANGELOG) and session state (HANDOVER, INBOX)
+3. Claude picks the next eligible task, executes it, updates governance
+4. Orchestra commits the work, runs pre-flight checks, spawns the next session
 
-Each session is stateless. All context passes through files in `.orchestra/`:
+Governance is config-driven — projects point Orchestra at their existing file structure rather than adopting a fixed layout. Three numbered, archivable files track all work:
 
 | File | Purpose | Written by |
 |------|---------|------------|
-| `PLAN.md` | Project plan, requirements, acceptance criteria | Human (read-only for Claude) |
-| `TODO.md` | Task backlog with checkboxes | Human + Claude |
-| `HANDOVER.md` | Context for the next session (overwritten each time) | Claude |
-| `CHANGELOG.md` | Append-only session history | Claude |
-| `DECISIONS.md` | Autonomous decision log | Claude |
+| **TODO** (T-numbers) | Tasks with status, tier, dependencies | Human + Claude |
+| **DECISIONS** (D-numbers) | Choices made with alternatives considered | Human + Claude |
+| **CHANGELOG** (C-numbers) | What changed, which task drove it | Claude |
+| `HANDOVER.md` | Session-to-session context (overwritten each time) | Claude |
 | `INBOX.md` | Human-to-Claude async messages | Human writes, Claude reads |
+
+Governance file paths are configured in `.orchestra/config`. Each governance file has a companion `CLAUDE.md` with its archiving protocol.
 
 ## Installation
 
@@ -45,14 +46,14 @@ export PATH="$HOME/claude-scripts:$PATH"
 cd ~/my-project
 orchestra init
 
-# 2. Write your plan
-$EDITOR .orchestra/PLAN.md
+# 2. Configure governance paths (if project has existing structure)
+$EDITOR .orchestra/config
 
-# 3. Add tasks
-$EDITOR .orchestra/TODO.md
+# 3. Write your plan
+$EDITOR .orchestra/PLAN.md   # or set PLAN_FILE in config
 
-# 4. Customise CLAUDE.md for your project
-$EDITOR CLAUDE.md
+# 4. Add strategic tasks to TODO
+$EDITOR TODO/TODO.md          # path depends on config
 
 # 5. Run the orchestrator (in tmux recommended)
 orchestra run
@@ -60,7 +61,9 @@ orchestra run
 
 ### Adding to an existing project
 
-If your project already has a `CLAUDE.md`, `orchestra init` will append just the workflow section rather than overwriting it. Your existing project instructions are preserved.
+`orchestra init` scans for existing governance files (TODO.md, DECISIONS.md, CHANGELOG.md). If found, it inherits their paths into `.orchestra/config`. If not found, it creates them in the default structure. If partial matches are found, it warns and asks for confirmation.
+
+If your project already has a `CLAUDE.md`, `orchestra init` appends the workflow section rather than overwriting it.
 
 ## Commands
 
@@ -68,14 +71,15 @@ If your project already has a `CLAUDE.md`, `orchestra init` will append just the
 
 Scaffolds a project for autonomous work:
 
-- Creates `.orchestra/` with all state file templates
+- Creates `.orchestra/` with config, toolchain, standing AC templates
+- Scans for existing governance files and inherits or creates them
 - Creates or appends to `CLAUDE.md`
 - Creates `.claude/settings.json` with hook definitions (if not present)
 - Initialises a git repo if needed
 
 ### `orchestra run`
 
-Starts the session loop. Spawns Claude Code sessions until all tasks are complete, a `BLOCKED` signal is received, or limits are reached.
+Starts the session loop. Runs pre-flight checks (config valid, governance files exist, plan file set), then spawns Claude Code sessions until all tasks are complete, a `BLOCKED` signal is received, or limits are reached.
 
 **Environment variables:**
 
@@ -87,23 +91,25 @@ Starts the session loop. Spawns Claude Code sessions until all tasks are complet
 | `CRASH_COOLDOWN_SECONDS` | `30` | Longer pause after crash recovery |
 | `NOTIFY_WEBHOOK` | | Optional webhook URL for notifications |
 
-### `orchestra reset [--archive]`
+### `orchestra reset [--label LABEL]`
 
-Resets all state files to blank templates.
+Resets session state (HANDOVER.md, INBOX.md, session logs) while leaving governance files untouched.
 
-With `--archive`: copies current state files and session logs to `.orchestra/archive/NNN-label/` before resetting. The label is extracted from the PLAN.md objective.
-
-### `orchestra graduate [--label NAME]`
-
-Completes a build phase: archives state files, creates a `docs/` skeleton for long-lived documentation, restructures changelogs, and resets orchestra for the next build.
-
-The `--label` flag names the archive (e.g. `--label mvp-build`). If omitted, the label is extracted from PLAN.md.
-
-After running, follow the printed checklist to consolidate project knowledge from plan files and orchestra state into the `docs/` structure.
+The `--label` flag names the archive (e.g. `--label mvp-build`). Current session state is archived to `.orchestra/archive/NNN-label/` before resetting.
 
 ### `orchestra status`
 
-Shows current progress: tasks complete/remaining, sessions logged, archived plans, plan objective, and last handover.
+Shows current progress: tasks complete/remaining, sessions logged, plan objective, and last handover.
+
+## Three-tier planning
+
+Orchestra uses a three-tier task hierarchy:
+
+1. **Strategic** (Tier 1) — human-authored, feature scope. When a session picks up a strategic task, it decomposes it into tactical sub-tasks.
+2. **Tactical** (Tier 2) — Claude-generated, component scope. Executed via the codewriting loop (implement → build → test → capture).
+3. **Tertiary** (Tier 3) — further decomposition if a tactical task is still too large. Maximum depth.
+
+Tasks track status (`OPEN`, `IN_PROGRESS`, `COMPLETE`, `BLOCKED`, `PROPOSED`) and dependencies between T-numbers.
 
 ## Hook scripts
 
@@ -115,44 +121,35 @@ Orchestra uses three Claude Code hooks (configured in `.claude/settings.json`):
 | Stop | Session end | `verify-completion.sh` | Verifies work via Haiku before allowing stop |
 | Stop | Session end | `commit-and-update.sh` | Commits staged changes + state files |
 
-## Writing good plans
-
-The quality of autonomous execution depends heavily on `PLAN.md`. A good plan:
-
-- Has **specific, numbered requirements** (R1, R2, ...) so tasks can reference them
-- Includes **architecture details** — where to put files, how components connect
-- Lists **acceptance criteria** (AC1, AC2, ...) that the verification hook checks
-- Defines **non-goals** to prevent scope creep
-- Breaks work into **single-session tasks** (1-15 minutes each)
-
-See `examples/test-orchestrator/.orchestra/PLAN.md` for a complete example.
-
 ## Directory layout
 
 ```
 your-project/
-├── .orchestra/                 # State files (managed by orchestra)
-│   ├── PLAN.md
-│   ├── TODO.md
-│   ├── CHANGELOG.md
-│   ├── HANDOVER.md
-│   ├── INBOX.md
-│   ├── DECISIONS.md
+├── .orchestra/                 # Orchestra configuration and session state
+│   ├── config                  # Governance paths, plan file, toolchain, standing AC
+│   ├── toolchain.md            # Stack-specific build/test/capture commands
+│   ├── standing-ac.md          # Acceptance criteria applied to every UI task
+│   ├── HANDOVER.md             # Session-to-session context
+│   ├── INBOX.md                # Human-to-Claude async messages
 │   ├── session-logs/           # Raw session output (stream-json)
-│   └── archive/                # Archived plans from orchestra reset --archive
+│   └── archive/                # Archived session state from orchestra reset
 │       └── 001-build-api/
 ├── .claude/
 │   └── settings.json           # Hook definitions
 ├── CLAUDE.md                   # Project instructions + workflow section
-├── docs/                       # Long-lived documentation (created by orchestra graduate)
-│   ├── architecture/
-│   ├── business-logic/
-│   ├── design/
-│   ├── decisions/
-│   └── known-issues.md
-├── changelogs/                 # Per-build changelogs (created by orchestra graduate)
+├── TODO/                       # Governance: tasks (path configurable)
+│   ├── TODO.md
+│   └── CLAUDE.md               # Archiving protocol
+├── Decisions/                  # Governance: decisions (path configurable)
+│   ├── DECISIONS.md
+│   └── CLAUDE.md
+├── Changelog/                  # Governance: changelog (path configurable)
+│   ├── CHANGELOG.md
+│   └── CLAUDE.md
 └── ... your code ...
 ```
+
+Governance file locations are configured in `.orchestra/config` — the paths above are defaults. Projects with existing file structures can point Orchestra at their own locations.
 
 ## Example
 
@@ -181,6 +178,10 @@ If a session crashes (context exhaustion, network error, etc.):
 4. Spawns a recovery session that assesses damage before continuing
 
 After `MAX_CONSECUTIVE_CRASHES` in a row, the orchestrator stops to avoid loops.
+
+## Specification
+
+See `docs/orchestra-v2-spec.md` for the full v2 design specification, including the ubiquitous language, detailed session algorithms, and governance protocols.
 
 ## License
 

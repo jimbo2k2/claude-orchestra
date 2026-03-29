@@ -3,110 +3,53 @@
 
 ## Multi-Session Autonomous Workflow
 
-This project uses an orchestrated multi-session workflow. You are a stateless
-worker. Persistent state lives in files, not in your context. An external
-orchestrator will spawn new sessions after you finish.
+This project uses **Orchestra v2** for autonomous multi-session development.
 
-**State files live in `.orchestra/`.** Do NOT create state files at the project root.
+### How it works
 
-### Session Start — Read State Files
+Orchestra spawns Claude Code sessions that execute tasks from a shared governance system. Each session reads project state, picks up the next eligible task, completes it, and hands over to the next session.
 
-At the start of every session, read these files IN THIS ORDER:
-1. `.orchestra/PLAN.md` — the overall goal, requirements, and acceptance criteria (skim; do not re-read every section if you already know the plan)
-2. `.orchestra/HANDOVER.md` — context from the previous session (most important for immediate work)
-3. `.orchestra/INBOX.md` — messages from the human operator (check for new instructions)
-4. `.orchestra/TODO.md` — the task backlog
-5. `.orchestra/DECISIONS.md` — autonomous decisions made by previous sessions (skim recent entries)
-6. `.orchestra/CHANGELOG.md` — history of what's been done (skim recent entries only)
+### Governance files
 
-When making judgment calls — how to handle an edge case, whether to split a
-task, what to name something — refer back to `.orchestra/PLAN.md`. It is the
-source of truth for intent and design decisions.
+Three numbered, archivable files track all project work:
+- **TODO** (T-numbers) — tasks with status, tier, dependencies
+- **DECISIONS** (D-numbers) — choices made with alternatives considered
+- **CHANGELOG** (C-numbers) — what changed, which task drove it, which decisions influenced it
 
-If `.orchestra/INBOX.md` has unprocessed messages (in the Messages section but
-not in Processed), follow those instructions BEFORE picking up your next TODO
-task. This may mean changing priorities, adjusting your approach, or adding new
-tasks. After acting on a message, copy it to the Processed section with a brief
-note.
+Paths are configured in `.orchestra/config`. Each governance file has an archiving protocol in its `CLAUDE.md`.
 
-**Important:** INBOX.md is only read and updated at session START — never during
-the wrap-up/state-file-update phase. This avoids edit clashes with the human
-operator who may write to it at any time.
+### Task statuses
+- **OPEN** — ready for pickup (only OPEN tasks are eligible)
+- **IN_PROGRESS** — a session is working on it
+- **COMPLETE** — finished and verified
+- **BLOCKED** — needs human input
+- **PROPOSED** — awaiting human approval
 
-### Single-Task Discipline
+### Three-tier planning
+1. **Strategic** (Tier 1) — human-authored, feature scope. Triggers decomposition.
+2. **Tactical** (Tier 2) — Claude-generated, component scope. Executed via codewriting loop.
+3. **Tertiary** (Tier 3) — further decomposition if needed. Maximum depth.
 
-- Pick up ONLY the first unchecked item in `.orchestra/TODO.md`
-- Complete that ONE task fully before doing anything else
-- Do NOT start a second task, even if the first one was quick
-- If a task is too large for one session, break it into sub-tasks in `.orchestra/TODO.md`,
-  complete the first sub-task, and hand over
+### Session lifecycle
+1. Read governance files, HANDOVER.md, INBOX.md
+2. Pick next eligible task (OPEN, dependencies satisfied)
+3. Execute (decompose if strategic, codewriting loop if implementation)
+4. Update governance (T/D/C entries)
+5. Check INBOX for human messages
+6. Capacity check → continue or exit
 
-### Context Management — CRITICAL
+### Exit signals
+- **HANDOVER** — tasks remain, spawn next session
+- **COMPLETE** — all tasks done
+- **BLOCKED** — needs human input
 
-Your session WILL be terminated if context is exhausted. Any work not saved
-to disk is lost. Protect yourself:
+### Model recommendation
+Write `model:effort` recommendation to HANDOVER.md (default: `opus:high`).
+Only recommend `sonnet:standard` for mechanical tasks.
 
-1. **Use sub-agents** for exploratory work (reading files, investigating bugs).
-   Sub-agents have their own context and don't fill up yours.
-2. **Avoid reading large files entirely.** Read only the sections you need.
-   Use grep/search to find relevant lines first.
-3. **Monitor your own context.** If you've been working for a while and have
-   done significant back-and-forth, it's time to wrap up.
-4. **When in doubt, hand over early.** A clean handover with one task done is
-   far better than a crash with no state saved.
-5. **Run `/compact` BEFORE writing state files.** This frees context space
-   to ensure your state file updates complete successfully.
-
-### State File Updates — HIGHEST PRIORITY
-
-Updating state files is the SINGLE MOST IMPORTANT thing you do in a session.
-The orchestrator and future sessions depend entirely on these files.
-
-**When to update:** Immediately after finishing your task (or deciding to stop).
-After running `/compact`. Before any other wrap-up work.
-
-**Update order:**
-1. `.orchestra/TODO.md` — Check off completed items. Add any sub-tasks you discovered.
-   Move completed items to the Completed section.
-2. `.orchestra/DECISIONS.md` — If you made any autonomous decisions this session (chose an
-   approach not explicitly specified in PLAN.md, resolved an ambiguity, picked
-   between alternatives), append an entry. Skip if no decisions were needed.
-3. `.orchestra/CHANGELOG.md` — Append a new entry at the top of the session log:
-   ```
-   ## Session — [YYYY-MM-DD HH:MM UTC]
-   - What you did (be specific about files and changes)
-   - Decisions made (reference DECISIONS.md entries if any)
-   - Issues encountered
-   - Test results
-   ```
-4. `.orchestra/HANDOVER.md` — OVERWRITE completely (don't append). Include:
-   - **What just happened** — summary of this session's work
-   - **Watch out for** — gotchas, quirks, things that might trip up the next session
-   - **Key files modified** — list of files changed and why
-   - **Current test status** — do tests pass? any known failures?
-   - **Next step** — what the next session should do
-
-**After updating state files:** Stop immediately. Output your exit signal.
-Do NOT do further work after writing state files.
-
-### Exit Signals
-
-Your final output line must be EXACTLY one of these (no extra text on the line):
-- `HANDOVER` — you completed your task, more tasks remain in `.orchestra/TODO.md`
-- `COMPLETE` — ALL items in `.orchestra/TODO.md` are checked off AND tests pass
-- `BLOCKED` — you need human input to proceed (explain why in `.orchestra/HANDOVER.md`)
-
-### Recovery Sessions
-
-If your session prompt mentions a previous crash, the codebase may be in a
-partially modified state. Always run tests first to assess the damage before
-picking up new work.
-
-### Graduation
-
-When a build phase is complete, run `orchestra graduate` to:
-- Archive state files and session logs
-- Create a `docs/` skeleton for long-lived documentation
-- Reset orchestra for the next build
-
-See the graduation checklist output for consolidation steps.
+### Key files
+- `.orchestra/config` — governance paths, plan file, toolchain, standing AC
+- `.orchestra/toolchain.md` — stack-specific build/test/capture commands
+- `.orchestra/standing-ac.md` — acceptance criteria for every UI task
+- `.orchestra/HANDOVER.md` — session-to-session context
+- `.orchestra/INBOX.md` — async human messages

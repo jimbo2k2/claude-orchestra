@@ -38,8 +38,7 @@ usage() {
     echo "Commands:"
     echo "  init [dir]        Scaffold a project with .orchestra/ state files"
     echo "  run               Start the autonomous session loop"
-    echo "  reset [--archive] Reset state files to blank templates"
-    echo "  graduate [--label NAME]  Archive, create docs skeleton, reset for next build"
+    echo "  reset [--label NAME] Archive handover + logs, reset for next build"
     echo "  status            Show current project status"
     echo ""
     echo "Environment variables:"
@@ -55,6 +54,58 @@ die() {
     exit 1
 }
 
+# ─── Governance scanning helpers ─────────────────────────────────────────────
+
+scan_governance_dir() {
+    local dir="$1"
+    local prefix="$2"
+    local main_file="$3"
+
+    if [ ! -d "$dir" ]; then
+        echo "NOT_FOUND"
+        return
+    fi
+
+    local has_main=false has_protocol=false has_archive=false has_numbers=false
+
+    [ -f "$dir/$main_file" ] && has_main=true
+    [ -f "$dir/CLAUDE.md" ] && has_protocol=true
+    [ -d "$dir/archive" ] && has_archive=true
+
+    if [ "$has_main" = true ] && grep -qE "${prefix}[0-9]{3,}" "$dir/$main_file" 2>/dev/null; then
+        has_numbers=true
+    fi
+
+    if [ "$has_main" = true ] && [ "$has_protocol" = true ] && [ "$has_archive" = true ] && [ "$has_numbers" = true ]; then
+        echo "MATCH"
+    elif [ "$has_main" = true ] || compgen -G "$dir/*.md" > /dev/null 2>&1; then
+        echo "CONFLICT"
+    else
+        echo "NOT_FOUND"
+    fi
+}
+
+resolve_conflict() {
+    local artifact_name="$1"
+    local dir="$2"
+
+    echo ""
+    echo "  WARNING: Found existing $artifact_name structure in $dir"
+    echo "  but it doesn't match the expected numbered/archivable format."
+    echo ""
+    echo "  Options:"
+    echo "    adopt  — Migrate to numbered format (creates archive/ and CLAUDE.md)"
+    echo "    point  — Use as-is (orchestra reads but may not write correctly)"
+    echo "    skip   — Don't manage $artifact_name through orchestra"
+    echo ""
+    read -rp "  Choice [adopt/point/skip]: " choice
+
+    case "${choice,,}" in
+        adopt|point|skip) echo "$choice" ;;
+        *) echo "skip" ;;
+    esac
+}
+
 # ─── init ─────────────────────────────────────────────────────────────────────
 
 cmd_init() {
@@ -63,51 +114,123 @@ cmd_init() {
 
     local orchestra_dir="$target_dir/.orchestra"
 
-    if [ -d "$orchestra_dir" ]; then
+    if [ -d "$orchestra_dir" ] && [ -f "$orchestra_dir/config" ]; then
         die ".orchestra/ already exists in $target_dir. Use 'orchestra reset' to start fresh."
     fi
 
-    echo "Initialising orchestra in $target_dir"
+    echo "Initialising orchestra v2 in $target_dir"
 
-    # Create .orchestra/ with state files
+    local config_lines=""
+
+    local -a ARTIFACTS=(
+        "TODO:T:TODO:TODO.md:TODO"
+        "DECISIONS:D:Decisions:DECISIONS.md:DECISIONS"
+        "CHANGELOG:C:Changelog:CHANGELOG.md:CHANGELOG"
+    )
+
+    for artifact_spec in "${ARTIFACTS[@]}"; do
+        IFS=: read -r art_name art_prefix search_dir main_file tpl_prefix <<< "$artifact_spec"
+
+        local result="NOT_FOUND"
+        local found_dir=""
+
+        if [ -d "$target_dir/$search_dir" ]; then
+            result=$(scan_governance_dir "$target_dir/$search_dir" "$art_prefix" "$main_file")
+            found_dir="$target_dir/$search_dir"
+        fi
+
+        case "$result" in
+            MATCH)
+                echo "   $art_name: inherited from $found_dir"
+                config_lines="${config_lines}${art_name}_FILE=${search_dir}/${main_file}\n"
+                config_lines="${config_lines}${art_name}_PROTOCOL=${search_dir}/CLAUDE.md\n"
+                ;;
+            CONFLICT)
+                local choice
+                choice=$(resolve_conflict "$art_name" "$found_dir")
+                case "$choice" in
+                    adopt)
+                        mkdir -p "$found_dir/archive"
+                        if [ ! -f "$found_dir/CLAUDE.md" ]; then
+                            cp "$TEMPLATE_DIR/governance/${tpl_prefix}-CLAUDE.md" "$found_dir/CLAUDE.md"
+                        fi
+                        echo "   $art_name: adopted existing structure in $found_dir"
+                        config_lines="${config_lines}${art_name}_FILE=${search_dir}/${main_file}\n"
+                        config_lines="${config_lines}${art_name}_PROTOCOL=${search_dir}/CLAUDE.md\n"
+                        ;;
+                    point)
+                        echo "   $art_name: pointing to existing file (manual compatibility)"
+                        config_lines="${config_lines}${art_name}_FILE=${search_dir}/${main_file}\n"
+                        config_lines="${config_lines}${art_name}_PROTOCOL=\n"
+                        ;;
+                    skip)
+                        echo "   $art_name: skipped (not managed by orchestra)"
+                        config_lines="${config_lines}${art_name}_FILE=\n"
+                        config_lines="${config_lines}${art_name}_PROTOCOL=\n"
+                        ;;
+                esac
+                ;;
+            NOT_FOUND)
+                local new_dir="$target_dir/$search_dir"
+                mkdir -p "$new_dir/archive"
+                cp "$TEMPLATE_DIR/governance/${tpl_prefix}.md" "$new_dir/$main_file"
+                cp "$TEMPLATE_DIR/governance/${tpl_prefix}-CLAUDE.md" "$new_dir/CLAUDE.md"
+                echo "   $art_name: created $search_dir/ with templates"
+                config_lines="${config_lines}${art_name}_FILE=${search_dir}/${main_file}\n"
+                config_lines="${config_lines}${art_name}_PROTOCOL=${search_dir}/CLAUDE.md\n"
+                ;;
+        esac
+    done
+
     mkdir -p "$orchestra_dir/session-logs" "$orchestra_dir/archive"
 
-    for f in PLAN.md TODO.md CHANGELOG.md HANDOVER.md INBOX.md DECISIONS.md; do
+    cat > "$orchestra_dir/config" << CONFIGEOF
+# .orchestra/config — Orchestra v2 configuration
+# Paths are relative to project root.
+
+# Governance file locations
+$(echo -e "$config_lines")
+# Strategic plan for current build (set before orchestra run)
+PLAN_FILE=
+
+# Toolchain (stack-specific build/test commands)
+TOOLCHAIN_FILE=.orchestra/toolchain.md
+
+# Standing acceptance criteria
+STANDING_AC_FILE=.orchestra/standing-ac.md
+CONFIGEOF
+    echo "   Created .orchestra/config"
+
+    for f in HANDOVER.md INBOX.md; do
         if [ -f "$TEMPLATE_DIR/$f" ]; then
             cp "$TEMPLATE_DIR/$f" "$orchestra_dir/$f"
-        else
-            die "Template $f not found in $TEMPLATE_DIR"
         fi
     done
-    echo "   Created .orchestra/ with state files"
 
-    # Handle CLAUDE.md
+    cp "$TEMPLATE_DIR/toolchain.md" "$orchestra_dir/toolchain.md"
+    cp "$TEMPLATE_DIR/standing-ac.md" "$orchestra_dir/standing-ac.md"
+    echo "   Created .orchestra/ with operational files, toolchain, standing AC"
+
     if [ -f "$target_dir/CLAUDE.md" ]; then
-        # Check if workflow section already exists
         if grep -q "## Multi-Session Autonomous Workflow" "$target_dir/CLAUDE.md" 2>/dev/null; then
             echo "   CLAUDE.md already has workflow section — skipping"
         else
-            # Append workflow section from the workflow-only template
             if [ -f "$TEMPLATE_DIR/CLAUDE-workflow.md" ]; then
                 echo "" >> "$target_dir/CLAUDE.md"
                 cat "$TEMPLATE_DIR/CLAUDE-workflow.md" >> "$target_dir/CLAUDE.md"
                 echo "   Appended workflow section to existing CLAUDE.md"
-            else
-                echo "   WARNING: CLAUDE-workflow.md template not found — add workflow section manually"
             fi
         fi
     else
-        # No CLAUDE.md — copy the full template
         if [ -f "$TEMPLATE_DIR/CLAUDE.md" ]; then
             cp "$TEMPLATE_DIR/CLAUDE.md" "$target_dir/CLAUDE.md"
             echo "   Created CLAUDE.md from template"
         fi
     fi
 
-    # Handle .claude/settings.json
     local claude_dir="$target_dir/.claude"
     if [ -f "$claude_dir/settings.json" ]; then
-        echo "   .claude/settings.json already exists — not overwriting (check hooks manually)"
+        echo "   .claude/settings.json exists — not overwriting (check hooks manually)"
     else
         mkdir -p "$claude_dir"
         if [ -f "$TEMPLATE_DIR/settings.json" ]; then
@@ -116,7 +239,6 @@ cmd_init() {
         fi
     fi
 
-    # Initialise git repo if needed
     if ! git -C "$target_dir" rev-parse --show-toplevel &>/dev/null; then
         git -C "$target_dir" init
         echo "   Initialised git repository"
@@ -124,16 +246,16 @@ cmd_init() {
 
     echo ""
     echo "Done! Next steps:"
-    echo "  1. Edit .orchestra/PLAN.md with your project plan"
-    echo "  2. Edit .orchestra/TODO.md with your task list"
-    echo "  3. Customise CLAUDE.md for your project"
-    echo "  4. Run: orchestra run"
+    echo "  1. Write a strategic plan and set PLAN_FILE in .orchestra/config"
+    echo "  2. Add T-numbered tasks to your TODO file"
+    echo "  3. Review .orchestra/toolchain.md and .orchestra/standing-ac.md"
+    echo "  4. Customise CLAUDE.md for your project"
+    echo "  5. Run: orchestra run"
 }
 
 # ─── run ──────────────────────────────────────────────────────────────────────
 
 cmd_run() {
-    # Validate we're in a project with .orchestra/
     local project_dir
     project_dir="$(git rev-parse --show-toplevel 2>/dev/null)" || die "Not in a git repository"
 
@@ -145,7 +267,15 @@ cmd_run() {
         die "CLAUDE.md not found in project root."
     fi
 
-    # Set STATE_DIR for the lib scripts and exec the orchestrator
+    # Source config reader and load config
+    source "$LIB_DIR/config.sh"
+    load_orchestra_config "$project_dir" || die "Failed to load .orchestra/config"
+
+    # Pre-flight checks
+    preflight_check || die "Pre-flight checks failed. Fix the errors above and retry."
+    check_eligible_tasks || die "Pre-flight: no eligible tasks."
+
+    # Lockfile is acquired inside orchestrator.sh (after trap is set) to ensure cleanup.
     export STATE_DIR="$project_dir/.orchestra"
     exec bash "$LIB_DIR/orchestrator.sh"
 }
@@ -153,151 +283,6 @@ cmd_run() {
 # ─── reset ────────────────────────────────────────────────────────────────────
 
 cmd_reset() {
-    local do_archive=false
-    for arg in "$@"; do
-        case "$arg" in
-            --archive) do_archive=true ;;
-            *) die "Unknown option: $arg" ;;
-        esac
-    done
-
-    local project_dir
-    project_dir="$(git rev-parse --show-toplevel 2>/dev/null)" || die "Not in a git repository"
-    local orchestra_dir="$project_dir/.orchestra"
-
-    if [ ! -d "$orchestra_dir" ]; then
-        die ".orchestra/ not found. Nothing to reset."
-    fi
-
-    # Archive if requested
-    if [ "$do_archive" = true ]; then
-        local archive_base="$orchestra_dir/archive"
-        mkdir -p "$archive_base"
-
-        # Find next sequence number
-        local last_num=0
-        local _old_nullglob=$(shopt -p nullglob 2>/dev/null)
-        shopt -s nullglob
-        for d in "$archive_base"/[0-9][0-9][0-9]-*/; do
-            [ -d "$d" ] || continue
-            local name="${d%/}"       # strip trailing slash
-            name="${name##*/}"        # strip path prefix
-            local num="${name%%-*}"   # extract number before first hyphen
-            num=$((10#$num))
-            [ "$num" -gt "$last_num" ] && last_num="$num"
-        done
-        $_old_nullglob
-        local next_num=$((last_num + 1))
-
-        # Extract label from PLAN.md objective
-        local label="unnamed"
-        if [ -f "$orchestra_dir/PLAN.md" ]; then
-            local obj_line
-            obj_line=$(sed -n '/^## Objective/{n;/^$/d;p;}' "$orchestra_dir/PLAN.md" | head -1)
-            if [ -n "$obj_line" ]; then
-                # Slugify: lowercase, replace spaces with hyphens, strip non-alnum
-                label=$(echo "$obj_line" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9 ]//g' | tr ' ' '-' | cut -c1-40)
-            fi
-        fi
-
-        local archive_dir
-        archive_dir=$(printf "%s/%03d-%s" "$archive_base" "$next_num" "$label")
-        mkdir -p "$archive_dir"
-
-        # Copy state files
-        for f in PLAN.md TODO.md CHANGELOG.md HANDOVER.md INBOX.md DECISIONS.md; do
-            [ -f "$orchestra_dir/$f" ] && cp "$orchestra_dir/$f" "$archive_dir/$f"
-        done
-
-        # Copy session logs
-        if [ -d "$orchestra_dir/session-logs" ] && [ "$(ls -A "$orchestra_dir/session-logs" 2>/dev/null)" ]; then
-            cp -r "$orchestra_dir/session-logs" "$archive_dir/session-logs"
-        fi
-
-        echo "Archived to $archive_dir"
-    fi
-
-    # Reset state files to templates
-    for f in TODO.md CHANGELOG.md HANDOVER.md INBOX.md DECISIONS.md; do
-        if [ -f "$TEMPLATE_DIR/$f" ]; then
-            cp "$TEMPLATE_DIR/$f" "$orchestra_dir/$f"
-        fi
-    done
-
-    # Reset PLAN.md too
-    if [ -f "$TEMPLATE_DIR/PLAN.md" ]; then
-        cp "$TEMPLATE_DIR/PLAN.md" "$orchestra_dir/PLAN.md"
-    fi
-
-    # Clear session logs
-    rm -f "$orchestra_dir/session-logs/"*.json 2>/dev/null || true
-
-    echo "State files reset to templates."
-    echo "Edit .orchestra/PLAN.md and .orchestra/TODO.md to start a new plan."
-}
-
-# ─── status ───────────────────────────────────────────────────────────────────
-
-cmd_status() {
-    local project_dir
-    project_dir="$(git rev-parse --show-toplevel 2>/dev/null)" || die "Not in a git repository"
-    local orchestra_dir="$project_dir/.orchestra"
-
-    if [ ! -d "$orchestra_dir" ]; then
-        die ".orchestra/ not found. Run 'orchestra init' first."
-    fi
-
-    echo "=== Orchestra Status ==="
-    echo ""
-
-    # Tasks
-    local total=0 done=0 remaining=0
-    if [ -f "$orchestra_dir/TODO.md" ]; then
-        total=$(grep -c '^\- \[' "$orchestra_dir/TODO.md" 2>/dev/null) || total=0
-        done=$(grep -c '^\- \[x\]' "$orchestra_dir/TODO.md" 2>/dev/null) || done=0
-        remaining=$(grep -c '^\- \[ \]' "$orchestra_dir/TODO.md" 2>/dev/null) || remaining=0
-    fi
-    echo "Tasks: $done/$total complete ($remaining remaining)"
-
-    # Sessions logged
-    local session_count=0
-    if [ -d "$orchestra_dir/session-logs" ]; then
-        session_count=$(ls "$orchestra_dir/session-logs/"*.json 2>/dev/null | wc -l | tr -d ' ')
-    fi
-    echo "Sessions: $session_count logged"
-
-    # Archived plans
-    local archive_count=0
-    if [ -d "$orchestra_dir/archive" ]; then
-        archive_count=$(ls -d "$orchestra_dir/archive/"[0-9][0-9][0-9]-*/ 2>/dev/null | wc -l | tr -d ' ')
-    fi
-    echo "Archived plans: $archive_count"
-
-    # Plan objective
-    echo ""
-    if [ -f "$orchestra_dir/PLAN.md" ]; then
-        local objective
-        objective=$(sed -n '/^## Objective/{n;/^$/d;p;}' "$orchestra_dir/PLAN.md" | head -3)
-        if [ -n "$objective" ] && ! echo "$objective" | grep -q '^<!--'; then
-            echo "Plan: $objective"
-        else
-            echo "Plan: (no objective set)"
-        fi
-    else
-        echo "Plan: (no PLAN.md)"
-    fi
-
-    # Last handover
-    echo ""
-    if [ -f "$orchestra_dir/HANDOVER.md" ]; then
-        echo "Last handover:"
-        head -15 "$orchestra_dir/HANDOVER.md" | sed 's/^/  /'
-    fi
-}
-
-# ─── graduate ─────────────────────────────────────────────────────────────
-
-cmd_graduate() {
     local label=""
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -306,6 +291,7 @@ cmd_graduate() {
                 label="$2"
                 shift 2
                 ;;
+            --label=*) label="${1#--label=}"; shift ;;
             *) die "Unknown option: $1" ;;
         esac
     done
@@ -314,169 +300,113 @@ cmd_graduate() {
     project_dir="$(git rev-parse --show-toplevel 2>/dev/null)" || die "Not in a git repository"
     local orchestra_dir="$project_dir/.orchestra"
 
-    if [ ! -d "$orchestra_dir" ]; then
-        die ".orchestra/ not found. Nothing to graduate."
-    fi
+    [ -d "$orchestra_dir" ] || die ".orchestra/ not found. Nothing to reset."
 
-    # Ensure there's actually content to archive
-    local has_content=false
-    for f in PLAN.md TODO.md CHANGELOG.md HANDOVER.md; do
-        if [ -f "$orchestra_dir/$f" ] && [ -s "$orchestra_dir/$f" ]; then
-            has_content=true
-            break
-        fi
-    done
-    [ "$has_content" = true ] || die ".orchestra/ has no content to graduate."
-
-    # ─── Archive ──────────────────────────────────────────────────────────────
+    # Archive HANDOVER + session-logs
     local archive_base="$orchestra_dir/archive"
     mkdir -p "$archive_base"
 
-    # Find next sequence number
     local last_num=0
     local _old_nullglob=$(shopt -p nullglob 2>/dev/null)
     shopt -s nullglob
     for d in "$archive_base"/[0-9][0-9][0-9]-*/; do
         [ -d "$d" ] || continue
-        local name="${d%/}"       # strip trailing slash
-        name="${name##*/}"        # strip path prefix
-        local num="${name%%-*}"   # extract number before first hyphen
-        num=$((10#$num))
+        local name="${d%/}"; name="${name##*/}"
+        local num="${name%%-*}"; num=$((10#$num))
         [ "$num" -gt "$last_num" ] && last_num="$num"
     done
     $_old_nullglob
     local next_num=$((last_num + 1))
 
-    # Extract label from PLAN.md if not provided via --label
-    if [ -z "$label" ]; then
-        label="unnamed"
-        if [ -f "$orchestra_dir/PLAN.md" ]; then
-            local obj_line
-            obj_line=$(sed -n '/^## Objective/{n;/^$/d;p;}' "$orchestra_dir/PLAN.md" | head -1)
-            if [ -n "$obj_line" ]; then
-                label=$(echo "$obj_line" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9 ]//g' | tr ' ' '-' | cut -c1-40)
-            fi
-        fi
-    fi
+    [ -z "$label" ] && label="$(date -u +%Y%m%d-%H%M%S)"
 
     local archive_dir
     archive_dir=$(printf "%s/%03d-%s" "$archive_base" "$next_num" "$label")
     mkdir -p "$archive_dir"
 
-    # Copy state files to archive
-    for f in PLAN.md TODO.md CHANGELOG.md HANDOVER.md INBOX.md DECISIONS.md; do
-        [ -f "$orchestra_dir/$f" ] && cp "$orchestra_dir/$f" "$archive_dir/$f"
-    done
-
-    # Copy session logs to archive
+    [ -f "$orchestra_dir/HANDOVER.md" ] && cp "$orchestra_dir/HANDOVER.md" "$archive_dir/"
     if [ -d "$orchestra_dir/session-logs" ] && [ "$(ls -A "$orchestra_dir/session-logs" 2>/dev/null)" ]; then
-        cp -r "$orchestra_dir/session-logs" "$archive_dir/session-logs"
+        cp -r "$orchestra_dir/session-logs" "$archive_dir/"
     fi
-
     echo "Archived to $archive_dir"
 
-    # ─── Create docs/ skeleton ────────────────────────────────────────────────
-    local docs_dir="$project_dir/docs"
-
-    mkdir -p "$docs_dir/architecture"
-    mkdir -p "$docs_dir/business-logic"
-    mkdir -p "$docs_dir/design"
-    mkdir -p "$docs_dir/decisions"
-
-    # Copy template files (skip if already exist — don't overwrite previous builds)
-    if [ ! -f "$docs_dir/architecture/current.md" ] && [ -f "$TEMPLATE_DIR/docs/architecture/current.md" ]; then
-        cp "$TEMPLATE_DIR/docs/architecture/current.md" "$docs_dir/architecture/current.md"
+    # Reset HANDOVER to template
+    if [ -f "$TEMPLATE_DIR/HANDOVER.md" ]; then
+        cp "$TEMPLATE_DIR/HANDOVER.md" "$orchestra_dir/HANDOVER.md"
     fi
 
-    if [ ! -f "$docs_dir/design/tokens.md" ] && [ -f "$TEMPLATE_DIR/docs/design/tokens.md" ]; then
-        cp "$TEMPLATE_DIR/docs/design/tokens.md" "$docs_dir/design/tokens.md"
+    # Clear INBOX processed messages
+    if [ -f "$orchestra_dir/INBOX.md" ]; then
+        sed -i '/^## Processed/,$d' "$orchestra_dir/INBOX.md"
+        echo -e "\n## Processed\n" >> "$orchestra_dir/INBOX.md"
     fi
-
-    if [ ! -f "$docs_dir/design/patterns.md" ] && [ -f "$TEMPLATE_DIR/docs/design/patterns.md" ]; then
-        cp "$TEMPLATE_DIR/docs/design/patterns.md" "$docs_dir/design/patterns.md"
-    fi
-
-    if [ ! -f "$docs_dir/decisions/current.md" ] && [ -f "$TEMPLATE_DIR/docs/decisions/current.md" ]; then
-        cp "$TEMPLATE_DIR/docs/decisions/current.md" "$docs_dir/decisions/current.md"
-    fi
-
-    # Build-specific decisions file — always create if it doesn't exist
-    if [ ! -f "$docs_dir/decisions/${label}.md" ] && [ -f "$TEMPLATE_DIR/docs/decisions/current.md" ]; then
-        cp "$TEMPLATE_DIR/docs/decisions/current.md" "$docs_dir/decisions/${label}.md"
-    fi
-
-    if [ ! -f "$docs_dir/known-issues.md" ] && [ -f "$TEMPLATE_DIR/docs/known-issues.md" ]; then
-        cp "$TEMPLATE_DIR/docs/known-issues.md" "$docs_dir/known-issues.md"
-    fi
-
-    echo "Created docs/ skeleton"
-
-    # ─── Restructure changelogs ───────────────────────────────────────────────
-    local changelogs_dir="$project_dir/changelogs"
-    mkdir -p "$changelogs_dir"
-
-    if [ -f "$project_dir/CHANGELOG.md" ]; then
-        mv "$project_dir/CHANGELOG.md" "$changelogs_dir/${label}.md"
-        echo "Moved CHANGELOG.md to changelogs/${label}.md"
-    fi
-
-    # Create fresh CHANGELOG.md from template
-    if [ -f "$TEMPLATE_DIR/CHANGELOG-fresh.md" ]; then
-        cp "$TEMPLATE_DIR/CHANGELOG-fresh.md" "$project_dir/CHANGELOG.md"
-        echo "Created fresh CHANGELOG.md"
-    fi
-
-    # ─── Reset orchestra state files ──────────────────────────────────────────
-    for f in TODO.md CHANGELOG.md HANDOVER.md INBOX.md DECISIONS.md PLAN.md; do
-        if [ -f "$TEMPLATE_DIR/$f" ]; then
-            cp "$TEMPLATE_DIR/$f" "$orchestra_dir/$f"
-        fi
-    done
 
     # Clear session logs
     rm -f "$orchestra_dir/session-logs/"*.json 2>/dev/null || true
 
-    echo "State files reset to templates."
+    echo ""
+    echo "Reset complete. Governance files (TODO, DECISIONS, CHANGELOG) untouched."
+    echo "To start a new build phase, update PLAN_FILE in .orchestra/config."
+}
 
-    # ─── Print consolidation checklist ────────────────────────────────────────
+# ─── status ───────────────────────────────────────────────────────────────────
+
+cmd_status() {
+    local project_dir
+    project_dir="$(git rev-parse --show-toplevel 2>/dev/null)" || die "Not in a git repository"
+
+    [ -d "$project_dir/.orchestra" ] || die ".orchestra/ not found. Run 'orchestra init' first."
+
+    source "$LIB_DIR/config.sh"
+    load_orchestra_config "$project_dir" || die "Failed to load .orchestra/config"
+
+    echo "=== Orchestra v2 Status ==="
     echo ""
-    echo "Orchestra graduated! Archive: ${archive_dir#$project_dir/}"
+
+    if [ -f "$TODO_FILE" ]; then
+        local total open in_progress complete blocked proposed
+        total=$(grep -c '^### T[0-9]' "$TODO_FILE" || true)
+        open=$(grep -c 'Status:.*OPEN' "$TODO_FILE" || true)
+        in_progress=$(grep -c 'Status:.*IN_PROGRESS' "$TODO_FILE" || true)
+        complete=$(grep -c 'Status:.*COMPLETE' "$TODO_FILE" || true)
+        blocked=$(grep -c 'Status:.*BLOCKED' "$TODO_FILE" || true)
+        proposed=$(grep -c 'Status:.*PROPOSED' "$TODO_FILE" || true)
+        echo "Tasks: $complete/$total complete | $open open | $in_progress in progress | $blocked blocked | $proposed proposed"
+    else
+        echo "Tasks: (TODO file not found at $TODO_FILE)"
+    fi
+
+    if [ -f "$DECISIONS_FILE" ]; then
+        local d_count
+        d_count=$(grep -c '^### D[0-9]' "$DECISIONS_FILE" || true)
+        echo "Decisions: $d_count current"
+    fi
+
+    if [ -f "$CHANGELOG_FILE" ]; then
+        local c_count
+        c_count=$(grep -c '^### C[0-9]' "$CHANGELOG_FILE" || true)
+        echo "Changelog: $c_count current entries"
+    fi
+
+    local session_count=0
+    if [ -d "$project_dir/.orchestra/session-logs" ]; then
+        session_count=$(find "$project_dir/.orchestra/session-logs" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')
+    fi
+    echo "Sessions: $session_count logged"
+
     echo ""
-    echo "Created docs/ skeleton. Now consolidate your project knowledge:"
+    if [ -n "${PLAN_FILE:-}" ] && [ -f "$PLAN_FILE" ]; then
+        echo "Plan: $PLAN_FILE"
+        head -5 "$PLAN_FILE" | sed 's/^/  /'
+    else
+        echo "Plan: (not set)"
+    fi
+
     echo ""
-    echo "  [ ] docs/architecture/current.md"
-    echo "      Extract from: CLAUDE.md, your plan files"
-    echo "      Include: tech stack, DB schema, auth model, key conventions"
-    echo ""
-    echo "  [ ] docs/business-logic/"
-    echo "      Extract from: your plan files, orchestra PLAN.md"
-    echo "      Create one file per domain (e.g. gate-logic.md, pocket-money.md)"
-    echo "      Include: rules, formulas, worked examples — NOT code blocks"
-    echo ""
-    echo "  [ ] docs/design/tokens.md"
-    echo "      Extract from: any design reference files"
-    echo "      Include: colour values, typography, spacing as tables — NOT CSS"
-    echo ""
-    echo "  [ ] docs/decisions/${label}.md"
-    echo "      Extract from: plan files, orchestra DECISIONS.md"
-    echo "      Freeze all decisions from this build phase"
-    echo ""
-    echo "  [ ] docs/known-issues.md"
-    echo "      Extract from: orchestra HANDOVER.md, CHANGELOG.md"
-    echo "      Include: current caveats, gotchas, sharp edges"
-    echo ""
-    echo "  [ ] CLAUDE.md — rewrite as compact index (<100 lines)"
-    echo "      Keep: overview, tech stack, rules, docs/ pointers, orchestra workflow"
-    echo "      Remove: content that moved to docs/"
-    echo ""
-    echo "  [ ] Delete graduated source files (plan files, design refs, etc.)"
-    echo ""
-    echo "Rules for docs/:"
-    echo "  - NO code blocks that mirror implementation — they go stale silently"
-    echo "  - Describe rules and formulas in prose"
-    echo "  - Reference source files by path for implementation details"
-    echo "  - Mark any illustrative snippets with <!-- VERIFY -->"
-    echo "  - Add \"Last verified: YYYY-MM-DD\" to each file header"
+    if [ -f "$project_dir/.orchestra/HANDOVER.md" ]; then
+        echo "Last handover:"
+        head -15 "$project_dir/.orchestra/HANDOVER.md" | sed 's/^/  /'
+    fi
 }
 
 # ─── Dispatch ─────────────────────────────────────────────────────────────────
@@ -488,7 +418,6 @@ case "$COMMAND" in
     init)   cmd_init "$@" ;;
     run)    cmd_run "$@" ;;
     reset)    cmd_reset "$@" ;;
-    graduate) cmd_graduate "$@" ;;
     status)   cmd_status "$@" ;;
     -h|--help|help|"")
         usage

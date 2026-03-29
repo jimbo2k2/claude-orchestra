@@ -1,0 +1,19 @@
+# .orchestra/config — Orchestra v2 configuration
+# Paths are relative to project root.
+
+# Governance file locations
+TODO_FILE=TODO/TODO.md
+TODO_PROTOCOL=TODO/CLAUDE.md
+DECISIONS_FILE=Decisions/DECISIONS.md
+DECISIONS_PROTOCOL=Decisions/CLAUDE.md
+CHANGELOG_FILE=Changelog/CHANGELOG.md
+CHANGELOG_PROTOCOL=Changelog/CLAUDE.md
+
+# Strategic plan for current build (set before orchestra run)
+PLAN_FILE=
+
+# Toolchain (stack-specific build/test commands)
+TOOLCHAIN_FILE=.orchestra/toolchain.md
+
+# Standing acceptance criteria
+STANDING_AC_FILE=.orchestra/standing-ac.md
