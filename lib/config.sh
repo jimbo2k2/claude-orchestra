@@ -61,6 +61,56 @@ preflight_check() {
     return "$errors"
 }
 
+# Validate that tools listed in toolchain.md's ## Prerequisites section are installed.
+# Layer 1: system tools (checked via command -v) — missing = ERROR, blocks orchestra run.
+# Layer 2: npm devDependencies (parsed from npm install lines) — missing = WARNING only.
+validate_toolchain_prereqs() {
+    local toolchain="$TOOLCHAIN_FILE"
+    local in_prereqs=false
+    local errors=0
+
+    if [ ! -f "$toolchain" ]; then
+        return 0  # no toolchain = nothing to validate (preflight_check handles existence)
+    fi
+
+    # Layer 1: system-level prerequisites
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^##[[:space:]]+Prerequisites ]]; then
+            in_prereqs=true
+            continue
+        fi
+        if $in_prereqs && [[ "$line" =~ ^## ]]; then
+            break
+        fi
+        if $in_prereqs && [[ "$line" =~ ^-[[:space:]]+([a-zA-Z0-9_-]+) ]]; then
+            local tool="${BASH_REMATCH[1]}"
+            if ! command -v "$tool" &>/dev/null; then
+                echo "ERROR: Toolchain prerequisite '$tool' not found. See $toolchain" >&2
+                errors=$((errors + 1))
+            fi
+        fi
+    done < "$toolchain"
+
+    # Layer 2: npm packages (warning only — enforcement happens during codewriting loop)
+    local working_dir
+    working_dir=$(grep -A1 '## Working Directory' "$toolchain" \
+        | grep -oP '`\K[^`/]+' | head -1) || true
+    if [[ -n "${working_dir:-}" && -f "${PROJECT_DIR}/${working_dir}/package.json" ]]; then
+        local pkg_file="${PROJECT_DIR}/${working_dir}/package.json"
+        while IFS= read -r pkg; do
+            if ! grep -q "\"$pkg\"" "$pkg_file" 2>/dev/null; then
+                echo "WARNING: '$pkg' not in $pkg_file. Run the Setup command from toolchain." >&2
+            fi
+        done < <(grep -oP 'npm install -D \K\S+' "$toolchain" || true)
+    fi
+
+    if [ "$errors" -gt 0 ]; then
+        echo "HINT: Install missing prerequisites before running orchestra." >&2
+        return 1
+    fi
+    return 0
+}
+
 # Coarse check: at least one OPEN task exists.
 # Full dependency eligibility (Depends: field) is checked by the session itself
 # during the task loop — too complex for a bash pre-flight check.

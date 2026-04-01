@@ -66,8 +66,8 @@ source of truth for intent and design decisions.
 If `.orchestra/INBOX.md` has unprocessed messages (in the Messages section but
 not in Processed), follow those instructions BEFORE picking up your next TODO
 task. This may mean changing priorities, adjusting your approach, or adding new
-tasks. After acting on a message, copy it to the Processed section with a brief
-note.
+tasks. After acting on a message, MOVE it from Messages to the Processed section
+(delete the original from Messages) and add a brief response note.
 
 **Important:** INBOX.md is only read and updated at session START — never during
 the wrap-up/state-file-update phase. This avoids edit clashes with the human

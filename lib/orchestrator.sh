@@ -63,6 +63,7 @@ if ! command -v jq &>/dev/null; then
 fi
 
 preflight_check || exit 1
+validate_toolchain_prereqs || exit 1
 check_eligible_tasks || exit 1
 
 # ─── Lockfile ───────────────────────────────────────────────────────────────

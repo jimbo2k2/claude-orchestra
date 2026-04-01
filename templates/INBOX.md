@@ -1,11 +1,11 @@
 # Inbox
 
-Messages from the human operator to Claude. This file is READ-ONLY for Claude —
-never delete or edit the Messages section. After processing a message, copy it
-to the Processed section with a brief response note.
+Messages from the human operator to Claude. After processing a message, MOVE it
+from Messages to the Processed section (delete the original from Messages) and
+add a brief response note.
 
 ## Messages
 <!-- Human: write instructions, corrections, or new tasks here -->
 
 ## Processed
-<!-- Claude: copy processed messages here with a note on what you did -->
+<!-- Claude: move processed messages here with a note on what you did -->
