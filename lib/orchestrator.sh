@@ -24,7 +24,7 @@ MAX_CONSECUTIVE_CRASHES="${MAX_CONSECUTIVE_CRASHES:-3}"  # Abort after this many
 COOLDOWN_SECONDS="${COOLDOWN_SECONDS:-15}"     # Pause between normal handovers
 CRASH_COOLDOWN_SECONDS="${CRASH_COOLDOWN_SECONDS:-30}"  # Longer pause after crash recovery
 NOTIFY_WEBHOOK="${NOTIFY_WEBHOOK:-}"           # Optional webhook (Telegram, Slack, etc.)
-QUOTA_PACING="${QUOTA_PACING:-false}"          # Enable subscription quota monitoring
+QUOTA_PACING="${QUOTA_PACING:-true}"            # Subscription quota monitoring (default: on)
 QUOTA_THRESHOLD="${QUOTA_THRESHOLD:-80}"       # Pause when 5-hour utilization exceeds this %
 QUOTA_POLL_INTERVAL="${QUOTA_POLL_INTERVAL:-120}"  # Seconds between quota API checks while waiting
 

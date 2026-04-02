@@ -90,6 +90,28 @@ Starts the session loop. Runs pre-flight checks (config valid, governance files 
 | `COOLDOWN_SECONDS` | `15` | Pause between normal handovers |
 | `CRASH_COOLDOWN_SECONDS` | `30` | Longer pause after crash recovery |
 | `NOTIFY_WEBHOOK` | | Optional webhook URL for notifications |
+| `QUOTA_PACING` | `true` | Subscription quota monitoring — pauses when 5-hour window is near-exhausted |
+| `QUOTA_THRESHOLD` | `80` | Utilization percentage at which to pause (0–100) |
+| `QUOTA_POLL_INTERVAL` | `120` | Seconds between quota checks while paused |
+
+#### Quota pacing
+
+Enabled by default. Before each session spawn, the orchestrator checks subscription utilization via the OAuth `/api/oauth/usage` endpoint (zero tokens, ~200ms). If the 5-hour rolling window exceeds `QUOTA_THRESHOLD`, it pauses and sleeps until the window resets, polling every `QUOTA_POLL_INTERVAL` seconds to confirm. After each session, it also extracts `rate_limit_event` data from the session log for awareness.
+
+This means `orchestra run` is safe to leave running overnight — it will pace itself around quota limits, resume after each window reset, and continue until all tasks are complete or `MAX_SESSIONS` is reached.
+
+**Overnight / large job:**
+```bash
+# Run up to 30 sessions, pacing automatically around quota limits
+MAX_SESSIONS=30 orchestra run
+```
+
+**Quick burst (disable pacing if you know you have quota):**
+```bash
+QUOTA_PACING=false orchestra run
+```
+
+The session limit (`MAX_SESSIONS`) is always enforced regardless of pacing. The orchestrator will never spawn more than `MAX_SESSIONS` sessions, even if it has been paused and resumed multiple times.
 
 ### `orchestra reset [--label LABEL]`
 

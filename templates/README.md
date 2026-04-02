@@ -43,10 +43,16 @@ Ensure these are ready before running:
 ### 3. Start the orchestrator
 
 ```bash
-orchestra run
+orchestra run                            # Default: up to 10 sessions, quota pacing ON
+MAX_SESSIONS=30 orchestra run            # Overnight / large job: more sessions, pacing handles quota
+QUOTA_PACING=false orchestra run         # Quick burst: skip pacing if you know you have quota
 ```
 
-Optional environment variables:
+**Quota pacing** is enabled by default. Before each session, the orchestrator checks your subscription's 5-hour rolling quota (via the OAuth usage endpoint — zero tokens). If utilization exceeds `QUOTA_THRESHOLD`, it pauses until the window resets, then resumes. This makes it safe to leave running overnight.
+
+The session limit (`MAX_SESSIONS`) is always enforced regardless of pacing.
+
+All environment variables:
 ```bash
 MAX_SESSIONS=10              # Safety limit on total sessions (default: 10)
 MAX_CONSECUTIVE_CRASHES=3    # Abort after N crashes in a row (default: 3)
@@ -54,8 +60,9 @@ COOLDOWN_SECONDS=15          # Pause between normal handovers (default: 15)
 CRASH_COOLDOWN_SECONDS=30    # Longer pause after crash recovery (default: 30)
 INITIAL_MODEL=sonnet         # Override model for the first session only
 NOTIFY_WEBHOOK=https://...   # Webhook for Telegram/Slack notifications
-QUOTA_PACING=true            # Enable subscription quota monitoring (default: false)
+QUOTA_PACING=true            # Subscription quota monitoring (default: true)
 QUOTA_THRESHOLD=80           # Pause when 5-hour utilization exceeds this % (default: 80)
+QUOTA_POLL_INTERVAL=120      # Seconds between quota checks while paused (default: 120)
 ```
 
 ### 4. Monitor progress
@@ -101,9 +108,9 @@ The orchestrator detects stalls (clean exit but no governance changes). After `M
 - Plan file or toolchain misconfigured
 
 ### Subscription quota exhaustion
-If sessions hit the 5-hour rolling quota limit, they may be killed without a clean exit. Symptoms: `rate_limit_event` entries in session logs showing utilization > 0.9, no `result` entry at end of log. Enable quota pacing:
+Quota pacing is on by default and should prevent this. If you see it anyway (symptoms: `rate_limit_event` entries in session logs showing utilization > 0.9, no `result` entry at end of log), check that pacing wasn't disabled and consider lowering the threshold:
 ```bash
-QUOTA_PACING=true QUOTA_THRESHOLD=80 orchestra run
+QUOTA_THRESHOLD=70 orchestra run
 ```
 
 ### Crash recovery
