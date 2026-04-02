@@ -201,7 +201,7 @@ STANDING_AC_FILE=.orchestra/standing-ac.md
 CONFIGEOF
     echo "   Created .orchestra/config"
 
-    for f in HANDOVER.md INBOX.md; do
+    for f in HANDOVER.md INBOX.md README.md; do
         if [ -f "$TEMPLATE_DIR/$f" ]; then
             cp "$TEMPLATE_DIR/$f" "$orchestra_dir/$f"
         fi

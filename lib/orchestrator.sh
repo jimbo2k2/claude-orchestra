@@ -24,6 +24,9 @@ MAX_CONSECUTIVE_CRASHES="${MAX_CONSECUTIVE_CRASHES:-3}"  # Abort after this many
 COOLDOWN_SECONDS="${COOLDOWN_SECONDS:-15}"     # Pause between normal handovers
 CRASH_COOLDOWN_SECONDS="${CRASH_COOLDOWN_SECONDS:-30}"  # Longer pause after crash recovery
 NOTIFY_WEBHOOK="${NOTIFY_WEBHOOK:-}"           # Optional webhook (Telegram, Slack, etc.)
+QUOTA_PACING="${QUOTA_PACING:-false}"          # Enable subscription quota monitoring
+QUOTA_THRESHOLD="${QUOTA_THRESHOLD:-80}"       # Pause when 5-hour utilization exceeds this %
+QUOTA_POLL_INTERVAL="${QUOTA_POLL_INTERVAL:-120}"  # Seconds between quota API checks while waiting
 
 # ─── Clear nested-session guard ──────────────────────────────────────────────
 # When orchestra is invoked from within a Claude Code session (e.g. user asks
@@ -116,6 +119,127 @@ restore_settings() {
         cp "$CLAUDE_SETTINGS_BACKUP" "$CLAUDE_SETTINGS"
         rm -f "$CLAUDE_SETTINGS_BACKUP"
     fi
+}
+
+# ─── Quota pacing ────────────────────────────────────────────────────────────
+# Monitors subscription quota via the OAuth usage endpoint and rate_limit_event
+# entries in session stream output. Pauses between sessions when quota is high.
+
+QUOTA_STATE_FILE="$STATE_DIR/quota-state"
+CREDENTIALS_FILE="${HOME}/.claude/.credentials.json"
+
+# Fetch current quota utilization from the OAuth usage endpoint.
+# Returns JSON: {"five_hour": N, "seven_day": N, "resets_at": "ISO8601"}
+# Returns empty string on failure (endpoint unavailable, auth expired, rate-limited).
+fetch_quota() {
+    if [ ! -f "$CREDENTIALS_FILE" ]; then
+        return 1
+    fi
+
+    local token
+    token=$(python3 -c "import json; print(json.load(open('$CREDENTIALS_FILE'))['claudeAiOauth']['accessToken'])" 2>/dev/null) || return 1
+
+    local response
+    response=$(curl -s --max-time 10 \
+        -H "Authorization: Bearer $token" \
+        -H "anthropic-beta: oauth-2025-04-20" \
+        "https://api.anthropic.com/api/oauth/usage" 2>/dev/null) || return 1
+
+    # Validate response has expected structure
+    if ! echo "$response" | jq -e '.five_hour.utilization' &>/dev/null; then
+        return 1
+    fi
+
+    local five_hour seven_day resets_at
+    five_hour=$(echo "$response" | jq -r '.five_hour.utilization // 0')
+    seven_day=$(echo "$response" | jq -r '.seven_day.utilization // 0')
+    resets_at=$(echo "$response" | jq -r '.five_hour.resets_at // empty')
+
+    echo "{\"five_hour\": $five_hour, \"seven_day\": $seven_day, \"resets_at\": \"$resets_at\"}"
+}
+
+# Wait for quota to drop below threshold. Called between sessions when pacing is enabled.
+# Sleeps until the 5-hour window resets, polling periodically to confirm.
+wait_for_quota() {
+    local quota_json
+    quota_json=$(fetch_quota) || {
+        notify "   Quota check failed (auth/network). Proceeding without pacing."
+        return 0
+    }
+
+    local five_hour resets_at
+    five_hour=$(echo "$quota_json" | jq -r '.five_hour')
+    local seven_day
+    seven_day=$(echo "$quota_json" | jq -r '.seven_day')
+    resets_at=$(echo "$quota_json" | jq -r '.resets_at')
+
+    notify "   Quota: 5h=${five_hour}% 7d=${seven_day}% (threshold: ${QUOTA_THRESHOLD}%)"
+
+    if [ "$(echo "$five_hour >= $QUOTA_THRESHOLD" | bc -l)" -eq 1 ]; then
+        # Calculate seconds until reset
+        local reset_epoch now_epoch wait_seconds
+        reset_epoch=$(date -d "$resets_at" +%s 2>/dev/null) || reset_epoch=0
+        now_epoch=$(date +%s)
+        wait_seconds=$((reset_epoch - now_epoch))
+
+        if [ "$wait_seconds" -gt 0 ]; then
+            local wait_minutes=$((wait_seconds / 60))
+            local reset_time
+            reset_time=$(date -d "$resets_at" '+%H:%M:%S UTC' 2>/dev/null || echo "$resets_at")
+            notify "   5-hour quota at ${five_hour}% (>= ${QUOTA_THRESHOLD}%). Pausing until reset at $reset_time (~${wait_minutes}m)"
+
+            # Sleep in intervals, re-checking quota periodically
+            while [ "$wait_seconds" -gt 0 ]; do
+                local sleep_for=$QUOTA_POLL_INTERVAL
+                if [ "$wait_seconds" -lt "$sleep_for" ]; then
+                    sleep_for=$((wait_seconds + 10))  # small buffer past reset
+                fi
+                sleep "$sleep_for"
+
+                # Re-check quota
+                quota_json=$(fetch_quota) || break
+                five_hour=$(echo "$quota_json" | jq -r '.five_hour')
+                resets_at=$(echo "$quota_json" | jq -r '.resets_at')
+
+                if [ "$(echo "$five_hour < $QUOTA_THRESHOLD" | bc -l)" -eq 1 ]; then
+                    notify "   Quota dropped to ${five_hour}%. Resuming."
+                    return 0
+                fi
+
+                # Recalculate remaining wait
+                reset_epoch=$(date -d "$resets_at" +%s 2>/dev/null) || break
+                now_epoch=$(date +%s)
+                wait_seconds=$((reset_epoch - now_epoch))
+            done
+
+            notify "   Quota window reset. Resuming."
+        fi
+    fi
+}
+
+# Extract the latest rate_limit_event from a session log and write to quota-state.
+# Called after each session completes.
+extract_session_quota() {
+    local session_log="$1"
+    if [ ! -f "$session_log" ]; then
+        return
+    fi
+
+    # Find the last rate_limit_event in the session log
+    local last_event
+    last_event=$(grep '"rate_limit_event"' "$session_log" | tail -1 || echo "")
+    if [ -z "$last_event" ]; then
+        return
+    fi
+
+    # Write to quota state file for the orchestrator to read
+    echo "$last_event" | jq -c '{
+        utilization: .rate_limit_info.utilization,
+        resetsAt: .rate_limit_info.resetsAt,
+        rateLimitType: .rate_limit_info.rateLimitType,
+        status: .rate_limit_info.status,
+        timestamp: now | todate
+    }' > "$QUOTA_STATE_FILE" 2>/dev/null || true
 }
 
 # ─── State file change detection ─────────────────────────────────────────────
@@ -742,7 +866,7 @@ stop_ram_monitor() {
     fi
 }
 
-trap 'stop_ram_monitor; restore_settings; cleanup_lock' EXIT
+trap 'stop_ram_monitor; restore_settings; cleanup_lock; rm -f "$QUOTA_STATE_FILE"' EXIT
 start_ram_monitor
 
 # ─── Main loop state ─────────────────────────────────────────────────────────
@@ -758,8 +882,16 @@ notify "   Project: $(basename "$PROJECT_DIR")"
 INITIAL_OPEN=$(grep -c 'Status:.*OPEN' "$TODO_FILE" 2>/dev/null) || INITIAL_OPEN=0
 notify "   Tasks: $INITIAL_OPEN open in $TODO_FILE"
 notify "   Max sessions: $MAX_SESSIONS | Max consecutive crashes: $MAX_CONSECUTIVE_CRASHES"
+if [ "$QUOTA_PACING" = "true" ]; then
+    notify "   Quota pacing: ON (threshold: ${QUOTA_THRESHOLD}%)"
+fi
 
 while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
+    # ─── Quota pacing: check before spawning ─────────────────────────────
+    if [ "$QUOTA_PACING" = "true" ]; then
+        wait_for_quota
+    fi
+
     SESSION_COUNT=$((SESSION_COUNT + 1))
     SESSION_TIMESTAMP="$(date -u +%Y%m%d-%H%M%S)"
     SESSION_LOG="$LOG_DIR/session-$(printf '%03d' $SESSION_COUNT)-$SESSION_TIMESTAMP.json"
@@ -822,6 +954,11 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
         ' 2>/dev/null
     EXIT_CODE=${PIPESTATUS[0]}
     set -eo pipefail
+
+    # ─── Extract quota state from session log ─────────────────────────────────
+    if [ "$QUOTA_PACING" = "true" ]; then
+        extract_session_quota "$SESSION_LOG"
+    fi
 
     # ─── Handle crash (non-zero exit) ─────────────────────────────────────────
     # Layer 3: Crash recovery — detect partial work, commit it, continue.
