@@ -356,7 +356,7 @@ flowchart TD
 
     VALID --> SNAPSHOT[Snapshot state\nfile checksums]
     SNAPSHOT --> MODEL{Read HANDOVER.md\nmodel recommendation}
-    MODEL -->|sonnet:standard| SPAWN_S[Spawn session\nsonnet]
+    MODEL -->|sonnet:medium| SPAWN_S[Spawn session\nsonnet]
     MODEL -->|opus:high| SPAWN_O[Spawn session\nopus]
     MODEL -->|first run| SPAWN_D[Spawn session\nopus:high]
 
@@ -691,7 +691,7 @@ flowchart TD
                 <tr><td class="term">Inbox</td><td>INBOX.md async human-to-Claude channel. Read at session start and after each task completion.</td><td class="not-confused">Handover (session-to-session, not human-to-session)</td></tr>
                 <tr><td class="term">Exit Signal</td><td>One of: HANDOVER (tasks remain), COMPLETE (all done), BLOCKED (needs human). Parsed by orchestrator.</td><td class="not-confused">A process exit code (numeric). Note: HANDOVER signal shares name with HANDOVER.md file.</td></tr>
                 <tr><td class="term">Capacity Check</td><td>Assessment after each task: sufficient context window for the next task?</td><td class="not-confused">Server resource check &mdash; this is about Claude's context window</td></tr>
-                <tr><td class="term">Model Recommendation</td><td>Written to HANDOVER.md as <code>model:effort</code> (e.g. <code>opus:high</code>, <code>sonnet:standard</code>). Default: <code>opus:high</code>. Only downgrade to sonnet for mechanical tasks.</td><td class="not-confused">User's model choice &mdash; this is Claude's assessment of complexity + effort needed</td></tr>
+                <tr><td class="term">Model Recommendation</td><td>Written to HANDOVER.md as <code>model:effort</code> (e.g. <code>opus:high</code>, <code>sonnet:medium</code>). Default: <code>opus:high</code>. Only downgrade to sonnet for mechanical tasks. Valid effort values: <code>low</code>, <code>medium</code>, <code>high</code>, <code>max</code>.</td><td class="not-confused">User's model choice &mdash; this is Claude's assessment of complexity + effort needed</td></tr>
 
                 <tr><td colspan="3" style="background:#16213e;color:white;font-weight:600;padding:0.5rem 0.8rem;">Acceptance Criteria</td></tr>
                 <tr><td class="term">Standing AC</td><td>Permanent criteria in <code>standing-ac.md</code>. Human-authored categories under which Task AC are generated.</td><td class="not-confused">Task AC (specific to one task)</td></tr>

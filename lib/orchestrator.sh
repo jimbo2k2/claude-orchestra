@@ -518,8 +518,8 @@ STEP 5 — STATE FILE UPDATES (before exiting)
     - What's next (next eligible task by T-number, brief description)
     - Gotchas or context the next session needs
     - Model recommendation: model:effort (default opus:high — only downgrade
-      to sonnet:standard for mechanical tasks like config changes, simple file
-      moves, or status updates)
+      to sonnet:medium for mechanical tasks like config changes, simple file
+      moves, or status updates). Valid effort values: low, medium, high, max.
 
 5f. .orchestra/COMMIT_MSG: write a single-line commit message, max 68 chars.
     Reference T-numbers where possible. Example:
@@ -802,8 +802,8 @@ STEP 5 — STATE FILE UPDATES (before exiting)
     - What's next (next eligible task by T-number, brief description)
     - Gotchas or context the next session needs
     - Model recommendation: model:effort (default opus:high — only downgrade
-      to sonnet:standard for mechanical tasks like config changes, simple file
-      moves, or status updates)
+      to sonnet:medium for mechanical tasks like config changes, simple file
+      moves, or status updates). Valid effort values: low, medium, high, max.
     - Note: this was a RECOVERY session — mention any repairs made in Step 0
 
 5f. .orchestra/COMMIT_MSG: write a single-line commit message, max 68 chars.
@@ -894,7 +894,7 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
 
     SESSION_COUNT=$((SESSION_COUNT + 1))
     SESSION_TIMESTAMP="$(date -u +%Y%m%d-%H%M%S)"
-    SESSION_LOG="$LOG_DIR/session-$(printf '%03d' $SESSION_COUNT)-$SESSION_TIMESTAMP.json"
+    SESSION_LOG="$LOG_DIR/$SESSION_TIMESTAMP-session-$(printf '%03d' $SESSION_COUNT).json"
 
     # Choose prompt based on whether previous session crashed
     if [ "$USE_RECOVERY_PROMPT" = true ]; then
@@ -919,7 +919,7 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
             RECOMMENDED_MODEL="sonnet"
         fi
         if echo "$REC_LINE" | grep -qi 'standard'; then
-            RECOMMENDED_EFFORT="standard"
+            RECOMMENDED_EFFORT="medium"
         fi
     fi
 
@@ -928,6 +928,14 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
         RECOMMENDED_MODEL="${INITIAL_MODEL}"
         notify "   Model: ${INITIAL_MODEL} (INITIAL_MODEL override)"
     fi
+
+    # Map effort labels to valid CLI values (low, medium, high, max)
+    case "$RECOMMENDED_EFFORT" in
+        low|medium|high|max) ;; # already valid
+        standard) RECOMMENDED_EFFORT="medium" ;;
+        *) notify "   WARNING: unknown effort '${RECOMMENDED_EFFORT}', defaulting to high"
+           RECOMMENDED_EFFORT="high" ;;
+    esac
 
     MODEL_FLAG="--model ${RECOMMENDED_MODEL}"
     EFFORT_FLAG="--effort ${RECOMMENDED_EFFORT}"

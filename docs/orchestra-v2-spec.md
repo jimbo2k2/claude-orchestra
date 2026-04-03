@@ -98,7 +98,7 @@ Orchestra is treated as a micro-DDD project. The following terms are precise and
 | **Inbox** | The INBOX.md async human-to-Claude message channel. Read at session start and after each task completion. Messages move from unread to processed. | Handover (which is session-to-session, not human-to-session) |
 | **Exit Signal** | One of three values a session outputs at termination: HANDOVER (normal, tasks remain), COMPLETE (all done), BLOCKED (needs human). Parsed by the orchestrator to determine next action. | A process exit code (which is numeric). Note: the HANDOVER signal shares its name with the HANDOVER.md file but refers to the session outcome, not the document. |
 | **Capacity Check** | The assessment a session makes after each task: is there sufficient context window remaining to take on the next task? Determines whether to continue the task loop or exit. | A resource check on the server (CPU, memory) — this is purely about Claude's context window |
-| **Model Recommendation** | Written to HANDOVER.md by the current session, advising the orchestrator on model and effort level for the next task. Format: `model:effort` (e.g. `opus:high`, `sonnet:standard`). Default is `opus:high` — only downgrade to sonnet for explicitly mechanical tasks (config changes, simple file moves, status updates). The orchestrator reads and applies both values. | A model selection by the user — the recommendation is Claude's assessment of the next task's complexity and the effort required |
+| **Model Recommendation** | Written to HANDOVER.md by the current session, advising the orchestrator on model and effort level for the next task. Format: `model:effort` (e.g. `opus:high`, `sonnet:medium`). Default is `opus:high` — only downgrade to sonnet for explicitly mechanical tasks (config changes, simple file moves, status updates). Valid effort values: `low`, `medium`, `high`, `max`. The orchestrator reads and applies both values. | A model selection by the user — the recommendation is Claude's assessment of the next task's complexity and the effort required |
 
 ### Acceptance Criteria
 
@@ -443,7 +443,7 @@ This structure ensures Claude always generates specific criteria *under* the sta
     - What was accomplished (T-numbers completed)
     - What's next (next eligible task)
     - Gotchas or context for the next session
-    - Model recommendation: `model:effort` (default `opus:high`; downgrade to `sonnet:standard` only for mechanical tasks like config changes or simple file moves)
+    - Model recommendation: `model:effort` (default `opus:high`; downgrade to `sonnet:medium` only for mechanical tasks like config changes or simple file moves). Valid effort values: `low`, `medium`, `high`, `max`.
 
 13. Write COMMIT_MSG
 
@@ -477,7 +477,7 @@ All checks must pass. Failure prints a specific error message and exits.
 
 ```
 1. Snapshot governance file checksums
-2. Read HANDOVER.md for model:effort recommendation (default: opus:high)
+2. Read HANDOVER.md for model:effort recommendation (default: opus:high). Valid effort values: low, medium, high, max.
 3. Spawn Claude session with recommended model and effort level
 4. Wait for session to complete
 5. Evaluate exit:

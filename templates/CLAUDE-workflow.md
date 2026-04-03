@@ -45,7 +45,7 @@ Paths are configured in `.orchestra/config`. Each governance file has an archivi
 
 ### Model recommendation
 Write `model:effort` recommendation to HANDOVER.md (default: `opus:high`).
-Only recommend `sonnet:standard` for mechanical tasks.
+Only recommend `sonnet:medium` for mechanical tasks. Valid effort values: `low`, `medium`, `high`, `max`.
 
 ### Key files
 - `.orchestra/config` — governance paths, plan file, toolchain, standing AC
