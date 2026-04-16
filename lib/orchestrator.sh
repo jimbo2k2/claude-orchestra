@@ -549,7 +549,8 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
     notify "   Model: ${RECOMMENDED_MODEL}:${RECOMMENDED_EFFORT}"
 
     # ─── Run Claude Code in headless mode ─────────────────────────────────────
-    # Text output goes to terminal (readable); stream-json goes to log file (forensic).
+    # stream-json goes to the log file for full metadata;
+    # a jq filter extracts readable text for the terminal.
     # Session runs in the worktree directory, not the main working tree.
 
     set +eo pipefail
@@ -557,10 +558,17 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
     claude -p "$CURRENT_PROMPT" \
         $MODEL_FLAG \
         $EFFORT_FLAG \
-        --output-format text \
+        --output-format stream-json \
         --verbose \
         --dangerously-skip-permissions \
-        2>&1 | tee "$SESSION_LOG"
+        2>&1 | tee "$SESSION_LOG" \
+        | jq -r --unbuffered '
+            if .type == "assistant" then
+                (.message.content[]? | select(.type == "text") | .text) // empty
+            elif .type == "result" then
+                "\n--- Session result: \(.result // "no result") ---"
+            else empty end
+        ' 2>/dev/null
     EXIT_CODE=${PIPESTATUS[0]}
     set -eo pipefail
 
@@ -624,7 +632,7 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
 
     # Extract exit signal from the stream-json result event
     # Extract exit signal from the last few lines of text output
-    FINAL=$(tail -5 "$SESSION_LOG" | tr -d '[:space:]' || echo "")
+    FINAL=$(grep '"type":"result"' "$SESSION_LOG" | tail -1 | jq -r '.result // empty' 2>/dev/null || echo "")
 
     # ─── Detect stalled progress (clean exit but no state changes) ────────────
     # This catches sessions that ran but didn't actually do or record anything.
