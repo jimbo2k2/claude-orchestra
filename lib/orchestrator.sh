@@ -290,8 +290,11 @@ The orchestrator cleans up the worktree after your session exits.
 3. Read .orchestra/CLAUDE.md — session-specific rules for autonomous mode.
 4. Read .orchestra/HANDOVER.md — context from the previous session.
 5. Read .orchestra/INBOX.md — check for human messages. Process any unread
-   messages before starting task work. If a message contradicts your assigned
-   tasks, write a HANDOVER note and exit BLOCKED.
+   messages before starting task work. After processing each message, MOVE it
+   from the Messages section to the Processed section and add a brief response
+   note. Do not leave processed messages in the Messages section.
+   If a message contradicts your assigned tasks, write a HANDOVER note and
+   exit BLOCKED.
 6. Read the governance files (TODO, DECISIONS, CHANGELOG) at the paths in config.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
