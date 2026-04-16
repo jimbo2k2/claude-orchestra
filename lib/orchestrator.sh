@@ -316,8 +316,11 @@ Your assigned T-numbers are in the TASKS field of .orchestra/config. For each ta
 3. If a task has a genuine blocker you cannot resolve autonomously, mark it
    BLOCKED in TODO.md with a reason and move to the next task.
 
-4. Between tasks (protocol step 20): evaluate remaining context window.
-   If sufficient, continue to the next task. If low, run session wrap-up.
+4. Between tasks (protocol step 20):
+   a. Re-read .orchestra/INBOX.md for new human messages.
+   b. Evaluate remaining context. If you have completed 3 or more tasks in
+      this session, prefer a clean HANDOVER over risking context exhaustion.
+   c. If continuing, return to step 1 for next task.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SESSION WRAP-UP

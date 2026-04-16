@@ -31,7 +31,7 @@ All work — interactive and autonomous — follows this sequence. This is the s
 | 17 | **Governance: Changelog** | No substantive changes -> skip. | Write C-entry. | — | Same |
 | 18 | **Governance: Complete task** | — | Mark COMPLETE with note. Flag human-verify items. | — | Same |
 | 19 | **Commit & push** | — | Commit on branch. Push. Do not merge to main. | — | Same |
-| 20 | **Context check** | Not Orchestra -> stop. | Evaluate context window. Continue or wrap up. | — | Orchestra only. |
+| 20 | **Context check** | Not Orchestra -> stop. | 1. Re-read INBOX.md for new messages. 2. If 3+ tasks completed this session, prefer clean HANDOVER over risking context exhaustion. 3. If continuing, return to step 1. | — | Orchestra only. |
 
 ### Gate Logic
 
