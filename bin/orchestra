@@ -472,11 +472,10 @@ After completing all steps, output a summary table of steps executed vs skipped.
     claude -p "$smoke_prompt" \
         --model "${MODEL:-opus}" \
         --effort "${EFFORT:-high}" \
-        --output-format stream-json \
+        --output-format text \
         --verbose \
         --dangerously-skip-permissions \
-        2>&1 | tee "$_SMOKE_LOG_FILE" \
-        | jq -r --unbuffered 'select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text' 2>/dev/null
+        2>&1 | tee "$_SMOKE_LOG_FILE"
 
     # Cleanup runs via the EXIT trap above
     echo ""
