@@ -17,18 +17,11 @@
 set -euo pipefail
 
 # ─── Resolve paths ────────────────────────────────────────────────────────────
-# Works both when run from the repo (bin/orchestra) and when installed
-# to a flat directory (~/claude-scripts/orchestra).
+# Project-local installation: everything lives under .orchestra/
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/../lib"
 TEMPLATE_DIR="$SCRIPT_DIR/../templates"
-
-# Installed layout fallback (flat ~/claude-scripts/)
-if [ ! -d "$LIB_DIR" ]; then
-    LIB_DIR="$SCRIPT_DIR"
-    TEMPLATE_DIR="$SCRIPT_DIR/templates"
-fi
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -38,15 +31,11 @@ usage() {
     echo "Commands:"
     echo "  init [dir]        Scaffold a project with .orchestra/ state files"
     echo "  run               Start the autonomous session loop"
+    echo "  test              Smoke test — verify protocol wiring with a synthetic task"
     echo "  reset [--label NAME] Archive handover + logs, reset for next build"
     echo "  status            Show current project status"
     echo ""
-    echo "Environment variables:"
-    echo "  MAX_SESSIONS              Max sessions before stopping (default: 10)"
-    echo "  MAX_CONSECUTIVE_CRASHES   Abort after N crashes in a row (default: 3)"
-    echo "  COOLDOWN_SECONDS          Pause between sessions (default: 15)"
-    echo "  CRASH_COOLDOWN_SECONDS    Pause after crash (default: 30)"
-    echo "  NOTIFY_WEBHOOK            Webhook URL for notifications"
+    echo "All run parameters are in .orchestra/config — no env vars, no CLI args."
 }
 
 die() {
@@ -182,7 +171,7 @@ cmd_init() {
         esac
     done
 
-    mkdir -p "$orchestra_dir/session-logs" "$orchestra_dir/archive"
+    mkdir -p "$orchestra_dir/sessions" "$orchestra_dir/archive"
 
     cat > "$orchestra_dir/config" << CONFIGEOF
 # .orchestra/config — Orchestra v2 configuration
@@ -268,16 +257,26 @@ cmd_run() {
     fi
 
     # Source config reader and load config
-    source "$LIB_DIR/config.sh"
+    source "$project_dir/.orchestra/lib/config.sh"
     load_orchestra_config "$project_dir" || die "Failed to load .orchestra/config"
 
     # Pre-flight checks
     preflight_check || die "Pre-flight checks failed. Fix the errors above and retry."
-    check_eligible_tasks || die "Pre-flight: no eligible tasks."
+
+    # Check tmux session name conflict
+    local tmux_name="${TMUX_SESSION:-orchestra}"
+    if tmux has-session -t "$tmux_name" 2>/dev/null; then
+        die "tmux session '$tmux_name' already exists. Attach with: tmux attach -t $tmux_name"
+    fi
 
     # Lockfile is acquired inside orchestrator.sh (after trap is set) to ensure cleanup.
     export STATE_DIR="$project_dir/.orchestra"
-    exec bash "$LIB_DIR/orchestrator.sh"
+    export PROJECT_DIR="$project_dir"
+
+    # Always run inside a tmux session
+    echo "Starting orchestra in tmux session '$tmux_name'..."
+    tmux new-session -d -s "$tmux_name" "cd $project_dir && bash $project_dir/.orchestra/bin/orchestrator.sh"
+    echo "Attached. View with: tmux attach -t $tmux_name"
 }
 
 # ─── reset ────────────────────────────────────────────────────────────────────
@@ -302,7 +301,7 @@ cmd_reset() {
 
     [ -d "$orchestra_dir" ] || die ".orchestra/ not found. Nothing to reset."
 
-    # Archive HANDOVER + session-logs
+    # Archive HANDOVER + sessions
     local archive_base="$orchestra_dir/archive"
     mkdir -p "$archive_base"
 
@@ -325,8 +324,8 @@ cmd_reset() {
     mkdir -p "$archive_dir"
 
     [ -f "$orchestra_dir/HANDOVER.md" ] && cp "$orchestra_dir/HANDOVER.md" "$archive_dir/"
-    if [ -d "$orchestra_dir/session-logs" ] && [ "$(ls -A "$orchestra_dir/session-logs" 2>/dev/null)" ]; then
-        cp -r "$orchestra_dir/session-logs" "$archive_dir/"
+    if [ -d "$orchestra_dir/sessions" ] && [ "$(ls -A "$orchestra_dir/sessions" 2>/dev/null)" ]; then
+        cp -r "$orchestra_dir/sessions" "$archive_dir/"
     fi
     echo "Archived to $archive_dir"
 
@@ -342,7 +341,7 @@ cmd_reset() {
     fi
 
     # Clear session logs
-    rm -f "$orchestra_dir/session-logs/"*.json 2>/dev/null || true
+    rm -f "$orchestra_dir/sessions/"*.json 2>/dev/null || true
 
     echo ""
     echo "Reset complete. Governance files (TODO, DECISIONS, CHANGELOG) untouched."
@@ -389,8 +388,8 @@ cmd_status() {
     fi
 
     local session_count=0
-    if [ -d "$project_dir/.orchestra/session-logs" ]; then
-        session_count=$(find "$project_dir/.orchestra/session-logs" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')
+    if [ -d "$project_dir/.orchestra/sessions" ]; then
+        session_count=$(find "$project_dir/.orchestra/sessions" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')
     fi
     echo "Sessions: $session_count logged"
 
@@ -409,6 +408,81 @@ cmd_status() {
     fi
 }
 
+# ─── test ────────────────────────────────────────────────────────────────────
+
+cmd_test() {
+    local project_dir
+    project_dir="$(git rev-parse --show-toplevel 2>/dev/null)" || die "Not in a git repository"
+
+    [ -d "$project_dir/.orchestra" ] || die ".orchestra/ not found."
+
+    source "$project_dir/.orchestra/lib/config.sh"
+    load_orchestra_config "$project_dir" 2>/dev/null || true
+
+    echo "Starting Orchestra smoke test..."
+    echo "  Using git worktree for isolation"
+    echo "  Task: synthetic protocol walkthrough"
+    echo ""
+
+    # Create a worktree for the smoke test (same pattern as real runs)
+    _SMOKE_PROJECT_DIR="$project_dir"
+    _SMOKE_WORKTREE="${WORKTREE_BASE:-/tmp/orchestra-$(basename "$project_dir")}/smoke-test"
+    _SMOKE_BRANCH="orchestra/smoke-test-$(date -u +%Y%m%d-%H%M%S)"
+    _SMOKE_LOG_FILE="$project_dir/.orchestra/sessions/smoke-test.json"
+
+    # Clean up any stale smoke test worktree
+    if [ -d "$_SMOKE_WORKTREE" ]; then
+        git -C "$project_dir" worktree remove --force "$_SMOKE_WORKTREE" 2>/dev/null || rm -rf "$_SMOKE_WORKTREE"
+    fi
+
+    git -C "$project_dir" worktree add "$_SMOKE_WORKTREE" -b "$_SMOKE_BRANCH" main \
+        || die "Could not create smoke test worktree"
+    echo "  Worktree: $_SMOKE_WORKTREE"
+    echo ""
+
+    # Cleanup function — runs on exit, Ctrl-C, or crash
+    cleanup_smoke_test() {
+        echo ""
+        echo "Cleaning up smoke test..."
+        cd "$_SMOKE_PROJECT_DIR" 2>/dev/null || true
+        git worktree remove --force "$_SMOKE_WORKTREE" 2>/dev/null || rm -rf "$_SMOKE_WORKTREE" 2>/dev/null
+        git branch -D "$_SMOKE_BRANCH" 2>/dev/null || true
+        rm -f "$_SMOKE_LOG_FILE" 2>/dev/null
+        echo "Smoke test worktree and branch cleaned up."
+    }
+    trap cleanup_smoke_test EXIT INT TERM
+
+    cd "$_SMOKE_WORKTREE"
+
+    local smoke_prompt
+    smoke_prompt="You are running an Orchestra smoke test in a git worktree. Follow DEVELOPMENT-PROTOCOL.md for a synthetic task:
+
+Task: Add a comment '# Smoke test: $(date -u +%Y-%m-%dT%H:%M:%SZ)' to the top of .orchestra/README.md
+
+Walk through EVERY protocol step (Part 1, steps 1-19). For each step, log:
+- Step number and name
+- Whether the gate triggered (skip/execute)
+- Which skill/tool was invoked (if any)
+- Result (pass/fail/skipped)
+
+This is a DRY RUN. Do NOT push. Do NOT update governance files (TODO, DECISIONS, CHANGELOG).
+
+After completing all steps, output a summary table of steps executed vs skipped."
+
+    claude -p "$smoke_prompt" \
+        --model "${MODEL:-opus}" \
+        --effort "${EFFORT:-high}" \
+        --output-format stream-json \
+        --verbose \
+        --dangerously-skip-permissions \
+        2>&1 | tee "$_SMOKE_LOG_FILE" \
+        | jq -r --unbuffered 'select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text' 2>/dev/null
+
+    # Cleanup runs via the EXIT trap above
+    echo ""
+    echo "Smoke test complete."
+}
+
 # ─── Dispatch ─────────────────────────────────────────────────────────────────
 
 COMMAND="${1:-}"
@@ -417,6 +491,7 @@ shift 2>/dev/null || true
 case "$COMMAND" in
     init)   cmd_init "$@" ;;
     run)    cmd_run "$@" ;;
+    test)   cmd_test "$@" ;;
     reset)    cmd_reset "$@" ;;
     status)   cmd_status "$@" ;;
     -h|--help|help|"")

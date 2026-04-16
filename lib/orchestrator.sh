@@ -6,7 +6,7 @@
 #   cd /path/to/your/project
 #   orchestra run     (preferred — via the CLI wrapper)
 #   — or —
-#   ~/claude-scripts/orchestrator.sh
+#   .orchestra/bin/orchestrator.sh
 #
 # The script will keep spawning Claude Code sessions until either:
 #   - All tasks in .orchestra/TODO.md are complete
@@ -18,15 +18,8 @@
 set -euo pipefail
 
 # ─── Configuration ────────────────────────────────────────────────────────────
-
-MAX_SESSIONS="${MAX_SESSIONS:-10}"              # Safety limit on total sessions
-MAX_CONSECUTIVE_CRASHES="${MAX_CONSECUTIVE_CRASHES:-3}"  # Abort after this many crashes in a row
-COOLDOWN_SECONDS="${COOLDOWN_SECONDS:-15}"     # Pause between normal handovers
-CRASH_COOLDOWN_SECONDS="${CRASH_COOLDOWN_SECONDS:-30}"  # Longer pause after crash recovery
-NOTIFY_WEBHOOK="${NOTIFY_WEBHOOK:-}"           # Optional webhook (Telegram, Slack, etc.)
-QUOTA_PACING="${QUOTA_PACING:-true}"            # Subscription quota monitoring (default: on)
-QUOTA_THRESHOLD="${QUOTA_THRESHOLD:-80}"       # Pause when 5-hour utilization exceeds this %
-QUOTA_POLL_INTERVAL="${QUOTA_POLL_INTERVAL:-120}"  # Seconds between quota API checks while waiting
+# All settings come from .orchestra/config. No env var overrides.
+# Values are loaded by load_orchestra_config() below.
 
 # ─── Clear nested-session guard ──────────────────────────────────────────────
 # When orchestra is invoked from within a Claude Code session (e.g. user asks
@@ -44,14 +37,13 @@ fi
 
 PROJECT_DIR="$(git rev-parse --show-toplevel)"
 STATE_DIR="${STATE_DIR:-${PROJECT_DIR}/.orchestra}"
-LOG_DIR="${LOG_DIR:-${STATE_DIR}/session-logs}"
+LOG_DIR="${STATE_DIR}/sessions"
 
 cd "$PROJECT_DIR"
 mkdir -p "$LOG_DIR"
 
 # ─── Load config ────────────────────────────────────────────────────────────
-SCRIPT_DIR_ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR_ORCH/config.sh"
+source "$PROJECT_DIR/.orchestra/lib/config.sh"
 load_orchestra_config "$PROJECT_DIR" || exit 1
 
 # ─── Pre-flight checks ─────────────────────────────────────────────────────
@@ -67,7 +59,7 @@ fi
 
 preflight_check || exit 1
 validate_toolchain_prereqs || exit 1
-check_eligible_tasks || exit 1
+# check_eligible_tasks removed — tasks come from config TASKS field, not TODO.md OPEN scan
 
 # ─── Lockfile ───────────────────────────────────────────────────────────────
 LOCKFILE="$STATE_DIR/orchestra.lock"
@@ -91,35 +83,19 @@ echo $$ > "$LOCKFILE"
 notify() {
     local message="$1"
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $message"
-    if [ -n "$NOTIFY_WEBHOOK" ]; then
-        curl -s -X POST "$NOTIFY_WEBHOOK" \
+    if [ -n "${NOTIFY_WEBHOOK:-}" ]; then
+        curl -s -X POST "${NOTIFY_WEBHOOK}" \
             -H "Content-Type: application/json" \
             -d "{\"text\": \"$message\"}" &>/dev/null || true
     fi
 }
 
-# ─── Configure lean settings for autonomous sessions ─────────────────────────
-# Back up interactive settings and install autonomous config (no heavy plugins)
-CLAUDE_SETTINGS="$PROJECT_DIR/.claude/settings.json"
-CLAUDE_SETTINGS_BACKUP="$PROJECT_DIR/.claude/settings.interactive.json"
+# ─── Settings ────────────────────────────────────────────────────────────────
+# One settings.json for both interactive and Orchestra — no swap needed.
+# The project's .claude/settings.json is used as-is.
 
-if [ -f "$CLAUDE_SETTINGS" ]; then
-    cp "$CLAUDE_SETTINGS" "$CLAUDE_SETTINGS_BACKUP"
-fi
-
-AUTONOMOUS_SETTINGS="$(dirname "$(realpath "$0")")/../templates/settings-autonomous.json"
-if [ -f "$AUTONOMOUS_SETTINGS" ]; then
-    mkdir -p "$PROJECT_DIR/.claude"
-    cp "$AUTONOMOUS_SETTINGS" "$CLAUDE_SETTINGS"
-    notify "Installed autonomous settings (lean plugin set)"
-fi
-
-restore_settings() {
-    if [ -f "$CLAUDE_SETTINGS_BACKUP" ]; then
-        cp "$CLAUDE_SETTINGS_BACKUP" "$CLAUDE_SETTINGS"
-        rm -f "$CLAUDE_SETTINGS_BACKUP"
-    fi
-}
+# Optional webhook for notifications (not in config — set as env var if needed)
+NOTIFY_WEBHOOK="${NOTIFY_WEBHOOK:-}"
 
 # ─── Quota pacing ────────────────────────────────────────────────────────────
 # Monitors subscription quota via the OAuth usage endpoint and rate_limit_event
@@ -295,247 +271,67 @@ recovery_commit() {
 # update T/D/C-numbered entries before exiting.
 
 read -r -d '' SESSION_PROMPT << 'PROMPT_EOF' || true
-You are an autonomous Claude Code session managed by Orchestra v2. You will
-read project state, execute tasks from a three-tier planning system, update
-governance files with numbered entries, and exit with a signal.
+You are an autonomous Claude Code session managed by Orchestra v2. Follow
+DEVELOPMENT-PROTOCOL.md at the project root in auto-proceed mode.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-UBIQUITOUS LANGUAGE — Key terms used throughout this prompt
+SESSION SETUP
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Session: A single Claude Code headless invocation, from spawn to exit signal.
-Task: A T-numbered entry in TODO.md with Status, Tier, optional Parent/Depends.
-Strategic Task: Tier 1, human-authored, coarse-grained. Triggers decomposition.
-Tactical Task: Tier 2, Claude-decomposed from a strategic task. Screen/component scope.
-Tertiary Task: Tier 3, further decomposition of a tactical task. Max depth.
-Decision: A D-numbered entry in DECISIONS.md recording a choice and alternatives.
-Changelog Entry: A C-numbered entry in CHANGELOG.md recording what changed and why.
-Task Loop: The outer loop — pick task, execute, update governance, check inbox, repeat.
-Codewriting Loop: The inner loop for implementation — write, review, test, debug.
-Standing AC: Permanent acceptance criteria in standing-ac.md (human-authored).
-Task AC: Per-task acceptance criteria generated under standing AC categories.
-Decomposition Review: Internal consistency check after decomposition (max 2 retries).
-Plan Coherence Check: External validation — alignment with project goals and language.
+You are working in a **git worktree** — an isolated copy of the repo on its own
+branch. Your main working tree is untouched. Create task branches with
+`git checkout -b orchestra/<t-number>-<slug>` as normal. Push branches when done.
+The orchestrator cleans up the worktree after your session exits.
 
-Task statuses:
-  OPEN — ready for pickup (default for new tasks)
-  IN_PROGRESS — a session is actively working on it
-  COMPLETE — work finished and verified
-  BLOCKED — cannot proceed without human input (reason noted)
-  PROPOSED — created by decomposition when scope expansion detected; skipped until
-              a human changes status to OPEN
+1. Read .orchestra/config — this contains your assigned T-numbers (TASKS field),
+   governance file paths, and the protocol reference.
+2. Read DEVELOPMENT-PROTOCOL.md — this is your authoritative task sequence.
+   Follow it in auto-proceed mode (all gates auto-accept).
+3. Read .orchestra/CLAUDE.md — session-specific rules for autonomous mode.
+4. Read .orchestra/HANDOVER.md — context from the previous session.
+5. Read .orchestra/INBOX.md — check for human messages. Process any unread
+   messages before starting task work. If a message contradicts your assigned
+   tasks, write a HANDOVER note and exit BLOCKED.
+6. Read the governance files (TODO, DECISIONS, CHANGELOG) at the paths in config.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 1 — READ PROJECT STATE
+TASK EXECUTION
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-1a. Read .orchestra/config to find all file paths (governance, plan, toolchain,
-    standing AC). All subsequent file reads use paths from config.
-1b. Read the three governance files — one read each:
-    - TODO file: contains archived summary index + current task detail
-    - DECISIONS file: contains archived summary index + current decisions
-    - CHANGELOG file: contains archived summary index + current entries
-1c. Read .orchestra/HANDOVER.md (previous session context)
-1d. Read .orchestra/INBOX.md — if unprocessed messages exist in the "Messages"
-    section, follow those instructions first, then move them to "Processed".
-    If a message contradicts the current plan or an in-progress task, complete
-    governance cleanup for any work done, write a HANDOVER note explaining the
-    contradiction, and exit BLOCKED.
-1e. Read the strategic plan file (PLAN_FILE from config) — understand goals,
-    constraints, and acceptance criteria for the current build.
+Your assigned T-numbers are in the TASKS field of .orchestra/config. For each task:
+
+1. Follow DEVELOPMENT-PROTOCOL.md Part 1 (steps 1-20) in auto-proceed mode.
+   - All checkpoint gates auto-accept.
+   - Decisions are logged as PROPOSED (human ratifies later).
+   - New tasks discovered are logged as PROPOSED in TODO.md.
+   - Commits go on a branch (orchestra/<t-number>-<slug>), never main.
+
+2. Create a session workspace at .orchestra/sessions/<T-number>/ with:
+   - tasks.md — subtask decomposition + model recommendations
+   - log.md — session decisions, findings, parked issues
+
+3. If a task has a genuine blocker you cannot resolve autonomously, mark it
+   BLOCKED in TODO.md with a reason and move to the next task.
+
+4. Between tasks (protocol step 20): evaluate remaining context window.
+   If sufficient, continue to the next task. If low, run session wrap-up.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 2 — TASK LOOP (outer loop)
+SESSION WRAP-UP
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Repeat until exit condition:
+Before exiting, follow DEVELOPMENT-PROTOCOL.md Part 2 (steps W1-W6).
 
-2a. PICK NEXT ELIGIBLE TASK
-    Eligible = Status is OPEN AND all tasks in Depends are COMPLETE.
-    Select by T-number order (lowest eligible first).
-    Edge cases:
-    - TODO has no entries at all → exit BLOCKED (empty file = misconfiguration)
-    - All tasks are COMPLETE → exit COMPLETE
-    - All remaining tasks are BLOCKED or depend on BLOCKED tasks → exit BLOCKED
-    - No eligible tasks but some are IN_PROGRESS from a crashed session →
-      treat the lowest IN_PROGRESS task as eligible (resume it)
-
-2b. SET STATUS TO IN_PROGRESS immediately in TODO.md.
-
-2c. ROUTE BY TIER:
-
-    ── If Tier 1 (strategic task, no Parent field) ──
-    Run TACTICAL DECOMPOSITION (see Step 3 below).
-    After decomposition passes quality gates, execute the first tactical task.
-
-    ── If Tier 2 or Tier 3 ──
-    Execute directly:
-    - If the task involves code changes → enter CODEWRITING LOOP (Step 4)
-    - If planning/docs/config only → execute directly, no codewriting loop
-
-2d. UPDATE GOVERNANCE after task completion:
-    - TODO: set task status to COMPLETE, add a brief completion note
-    - Parent check: if the completed task has a Parent, check whether ALL
-      sibling tasks under that parent are now COMPLETE. If so, mark the parent
-      COMPLETE automatically. Recurse upward if the parent's parent should
-      also complete.
-    - DECISIONS: add a D-numbered entry for every non-trivial choice made
-      during this task. Include alternatives considered. Use the next sequential
-      D-number (check the <!-- Next number: DXXX --> comment).
-    - CHANGELOG: add a C-numbered entry for the work completed. Link to the
-      T-number and any D-numbers. Use the next sequential C-number. Include
-      the Files: field listing files created or modified.
-
-2e. READ INBOX.md between tasks — check for new human messages.
-    Process any new messages, mark as read.
-    If a message contradicts the current plan or an in-progress task:
-    - Complete governance cleanup for work already done
-    - Write HANDOVER note explaining the contradiction
-    - Exit BLOCKED
-
-2f. CAPACITY CHECK:
-    Estimate context window usage.
-    - If sufficient capacity AND next eligible task is appropriate → loop to 2a
-    - If low capacity OR next task is complex → proceed to Step 5 (exit)
-    When in doubt, exit — clean handover beats running out of context.
+Then write .orchestra/COMMIT_MSG with a single-line commit message (max 68 chars,
+reference T-numbers). The orchestrator uses this for the session commit.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 3 — TACTICAL DECOMPOSITION (when picking up a Tier 1 task)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-3a. Read the plan file (PLAN_FILE) and any relevant bounded context docs
-    referenced in the plan (data models, module definitions, published language).
-
-3b. Generate tactical tasks:
-    - Each gets the next sequential T-number
-    - Set Tier: 2, Parent: <strategic task T-number>
-    - Set Depends: links where execution order matters
-    - Set Status: OPEN
-    - Write them into TODO.md under the current tasks section
-
-3c. DECOMPOSITION REVIEW (internal consistency):
-    - Are the tasks collectively sufficient to satisfy the parent strategic task?
-    - Are dependencies correctly ordered (no circular refs)?
-    - Is there overlap or duplication between tasks?
-    - Maximum 2 retries if issues found. If still failing → mark strategic task
-      BLOCKED with diagnostic note and exit the decomposition.
-
-3d. PLAN COHERENCE CHECK (external validation):
-    - Does the decomposition align with the strategic plan's goals/constraints?
-    - Is it consistent with the bounded context's data model and module definition?
-    - Do naming choices follow PUBLISHED-LANGUAGE.md?
-    - Are cross-context dependencies accounted for?
-    - Does the work fit the project's current phase?
-    Outcomes:
-    - Pass → execute first tactical task immediately
-    - Scope expansion detected → flag in INBOX.md, continue with safe subset
-      (tasks directly implied by the plan). Write excluded tasks as PROPOSED
-      with a note referencing the INBOX flag.
-    - Fundamentally incoherent → mark strategic task BLOCKED, exit BLOCKED
-
-3e. If a tactical task proves more complex than expected during execution,
-    decompose it further into Tier 3 (tertiary) tasks using the same pattern.
-    Three tiers is the maximum — if a fourth level would be needed, mark
-    BLOCKED (the strategic plan was too ambitious for a single task).
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 4 — CODEWRITING LOOP (inner loop for implementation tasks)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-For each tactical or tertiary task that involves code changes:
-
-4a. GENERATE TASK AC
-    Read standing-ac.md (STANDING_AC_FILE from config).
-    Write task-level acceptance criteria as children under the standing AC
-    categories. Record them in the task detail in TODO.md before implementation.
-
-4b. WRITE CODE
-    Read toolchain.md (TOOLCHAIN_FILE from config) for build, test, and
-    capture commands and conventions.
-    Implement the component/hook/screen/query/migration.
-
-4c. CODE REVIEW (mandatory self-review pass)
-    Re-read every file created or modified for this task.
-    Check for: missing imports, wrong variable names, hardcoded values that
-    should reference constants/config, unclosed tags/brackets, incorrect
-    function signatures, props that don't match interfaces, SQL column names
-    that don't match the schema, incorrect platform-specific code.
-    Run the build command from toolchain.md to confirm compilation.
-    Produce an issue list with severity ratings.
-
-4d. CONDITIONAL SECOND PASS
-    If code review found issues:
-    - Fix all issues
-    - Re-run code review
-    If clean (or clean after fix) → continue to UI test.
-
-4e. UI TEST (if applicable — skip for non-UI tasks)
-    Read toolchain.md for the exact serve and capture commands.
-    a. Ensure dev server is running (start command from toolchain).
-       If it fails to start → mark task BLOCKED ("build failed"), exit loop.
-    b. Run the capture/test tool at the viewport specified in toolchain.
-       If the tool crashes → mark task BLOCKED ("UI test infra failure"), exit loop.
-    c. Navigate to the screen under test.
-    d. Two feedback channels:
-       - Visual: screenshot capture → analyse layout/styling
-       - Structural: DOM query via data-testid → assert elements present
-    e. Data verification: query database to confirm data operations if applicable.
-    f. Evaluate against Standing AC + Task AC.
-
-4f. DEBUG PASS (maximum 3 iterations)
-    If failures detected at 4e:
-    - Diagnose: layout error vs logic error vs state error
-    - Fix root cause
-    - Loop back to 4e (UI test)
-    If all acceptance criteria pass:
-    - Task is done — exit codewriting loop, return to task loop step 2d
-    If 3 debug iterations exhausted without passing:
-    - Mark task BLOCKED with diagnostic note listing what was attempted
-    - Write partial CHANGELOG entry noting the attempts
-    - Exit codewriting loop, return to task loop step 2d
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 5 — STATE FILE UPDATES (before exiting)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-5a. Run /compact to free context.
-
-5b. TODO.md: verify all tasks you completed this session show Status: COMPLETE
-    with T-numbers. Ensure any decomposed tasks are written with correct Tier,
-    Parent, Depends, and Status fields.
-
-5c. DECISIONS.md: add D-numbered entries for all choices made this session.
-    Each entry must include: Date, Status (ACTIVE), Context (bounded context
-    code if applicable), Detail, and Alternatives considered.
-
-5d. CHANGELOG.md: add C-numbered entries for all changes made this session.
-    Each entry must include: Date, Task (T-number), Decision (D-numbers if
-    applicable), Type (FEATURE/FIX/REFACTOR/CONFIG/DOCS), Files (list of
-    files touched), Summary.
-
-5e. HANDOVER.md: overwrite with:
-    - What was accomplished (T-numbers completed, D-numbers recorded)
-    - What's next (next eligible task by T-number, brief description)
-    - Gotchas or context the next session needs
-    - Model recommendation: model:effort (default opus:high — only downgrade
-      to sonnet:medium for mechanical tasks like config changes, simple file
-      moves, or status updates). Valid effort values: low, medium, high, max.
-
-5f. .orchestra/COMMIT_MSG: write a single-line commit message, max 68 chars.
-    Reference T-numbers where possible. Example:
-    "Build PostCard component with tag display (T042)"
-
-5g. Check if any governance file exceeds its archiving threshold. If so, read
-    the protocol file (TODO_PROTOCOL, DECISIONS_PROTOCOL, or CHANGELOG_PROTOCOL
-    from config) and perform the archive as a housekeeping step.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 6 — EXIT SIGNAL
+EXIT SIGNAL
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Your final output line must be EXACTLY one of these three words:
-- HANDOVER — you completed one or more tasks but eligible tasks remain
-- COMPLETE — all tasks in TODO are COMPLETE
+- HANDOVER — you completed one or more tasks but assigned tasks remain
+- COMPLETE — all assigned tasks are done
 - BLOCKED — you need human input (reason written to INBOX.md and HANDOVER.md)
 PROMPT_EOF
 
@@ -546,281 +342,36 @@ PROMPT_EOF
 read -r -d '' RECOVERY_PROMPT << 'PROMPT_EOF' || true
 You are an autonomous Claude Code session managed by Orchestra v2. The previous
 session CRASHED — there may be partial or broken work. You must assess damage
-before entering the normal task loop.
+before entering the normal task flow.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-UBIQUITOUS LANGUAGE — Key terms used throughout this prompt
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Session: A single Claude Code headless invocation, from spawn to exit signal.
-Task: A T-numbered entry in TODO.md with Status, Tier, optional Parent/Depends.
-Strategic Task: Tier 1, human-authored, coarse-grained. Triggers decomposition.
-Tactical Task: Tier 2, Claude-decomposed from a strategic task. Screen/component scope.
-Tertiary Task: Tier 3, further decomposition of a tactical task. Max depth.
-Decision: A D-numbered entry in DECISIONS.md recording a choice and alternatives.
-Changelog Entry: A C-numbered entry in CHANGELOG.md recording what changed and why.
-Task Loop: The outer loop — pick task, execute, update governance, check inbox, repeat.
-Codewriting Loop: The inner loop for implementation — write, review, test, debug.
-Standing AC: Permanent acceptance criteria in standing-ac.md (human-authored).
-Task AC: Per-task acceptance criteria generated under standing AC categories.
-Decomposition Review: Internal consistency check after decomposition (max 2 retries).
-Plan Coherence Check: External validation — alignment with project goals and language.
-
-Task statuses:
-  OPEN — ready for pickup (default for new tasks)
-  IN_PROGRESS — a session is actively working on it
-  COMPLETE — work finished and verified
-  BLOCKED — cannot proceed without human input (reason noted)
-  PROPOSED — created by decomposition when scope expansion detected; skipped until
-              a human changes status to OPEN
+Follow DEVELOPMENT-PROTOCOL.md at the project root in auto-proceed mode.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 0 — DAMAGE ASSESSMENT (recovery only — do this BEFORE the normal flow)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-0a. Read .orchestra/config to find all file paths.
-
-0b. Run the build command from toolchain.md (TOOLCHAIN_FILE in config).
-    Does the project compile? Record the result.
-
-0c. Check governance files for consistency:
-    - TODO.md: are there half-written entries? Is the next-number comment correct?
-    - DECISIONS.md: same checks — incomplete entries, correct next-number?
-    - CHANGELOG.md: same checks.
-    If any governance file has corrupt or incomplete entries, repair them:
-    - Complete partial entries if the intent is clear
-    - Remove fragments if the intent is unclear
-    - Fix next-number comments
-
+0a. Read .orchestra/config to find all file paths and assigned T-numbers.
+0b. Read .orchestra/toolchain.md. Run the type check command. Does it compile?
+0c. Check governance files (TODO, DECISIONS, CHANGELOG) for corrupt or
+    incomplete entries. Repair if intent is clear, remove fragments if not.
 0d. Run git status — check for uncommitted work from the crashed session.
-    If there are staged or unstaged changes, review them to understand what
-    the previous session was working on.
+0e. For any task marked IN_PROGRESS in TODO.md: inspect actual file state,
+    determine whether to continue, restart, or revert.
+0f. If issues found, commit repairs: "fix: recovery repairs after session crash"
 
-0e. For any task marked IN_PROGRESS in TODO.md:
-    - Inspect the actual state of the files the task would have touched
-    - Determine: is the work mostly done (continue), partially done (evaluate),
-      or barely started (redo from scratch)?
-    - If continuing: pick up where it left off
-    - If redoing: revert partial changes for that task, then start fresh
-
-0f. If issues were found in 0b-0e, fix them and commit the repairs before
-    proceeding. Use commit message: "fix: recovery repairs after session crash"
-
-After damage assessment, proceed to the normal session flow below.
+After damage assessment, proceed to the normal session flow: read SESSION SETUP,
+then TASK EXECUTION, SESSION WRAP-UP, and EXIT SIGNAL sections from the normal
+session prompt. All the same rules apply — DEVELOPMENT-PROTOCOL.md in auto-proceed
+mode. Note in the HANDOVER that this was a recovery session and mention any
+repairs made in Step 0.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 1 — READ PROJECT STATE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-1a. Read .orchestra/config to find all file paths (governance, plan, toolchain,
-    standing AC). All subsequent file reads use paths from config.
-    (Skip if already read during damage assessment.)
-1b. Read the three governance files — one read each:
-    - TODO file: contains archived summary index + current task detail
-    - DECISIONS file: contains archived summary index + current decisions
-    - CHANGELOG file: contains archived summary index + current entries
-1c. Read .orchestra/HANDOVER.md (previous session context)
-1d. Read .orchestra/INBOX.md — if unprocessed messages exist in the "Messages"
-    section, follow those instructions first, then move them to "Processed".
-    If a message contradicts the current plan or an in-progress task, complete
-    governance cleanup for any work done, write a HANDOVER note explaining the
-    contradiction, and exit BLOCKED.
-1e. Read the strategic plan file (PLAN_FILE from config) — understand goals,
-    constraints, and acceptance criteria for the current build.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 2 — TASK LOOP (outer loop)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Repeat until exit condition:
-
-2a. PICK NEXT ELIGIBLE TASK
-    Eligible = Status is OPEN AND all tasks in Depends are COMPLETE.
-    Select by T-number order (lowest eligible first).
-    Edge cases:
-    - TODO has no entries at all → exit BLOCKED (empty file = misconfiguration)
-    - All tasks are COMPLETE → exit COMPLETE
-    - All remaining tasks are BLOCKED or depend on BLOCKED tasks → exit BLOCKED
-    - No eligible tasks but some are IN_PROGRESS from a crashed session →
-      treat the lowest IN_PROGRESS task as eligible (resume it)
-
-2b. SET STATUS TO IN_PROGRESS immediately in TODO.md.
-
-2c. ROUTE BY TIER:
-
-    ── If Tier 1 (strategic task, no Parent field) ──
-    Run TACTICAL DECOMPOSITION (see Step 3 below).
-    After decomposition passes quality gates, execute the first tactical task.
-
-    ── If Tier 2 or Tier 3 ──
-    Execute directly:
-    - If the task involves code changes → enter CODEWRITING LOOP (Step 4)
-    - If planning/docs/config only → execute directly, no codewriting loop
-
-2d. UPDATE GOVERNANCE after task completion:
-    - TODO: set task status to COMPLETE, add a brief completion note
-    - Parent check: if the completed task has a Parent, check whether ALL
-      sibling tasks under that parent are now COMPLETE. If so, mark the parent
-      COMPLETE automatically. Recurse upward if the parent's parent should
-      also complete.
-    - DECISIONS: add a D-numbered entry for every non-trivial choice made
-      during this task. Include alternatives considered. Use the next sequential
-      D-number (check the <!-- Next number: DXXX --> comment).
-    - CHANGELOG: add a C-numbered entry for the work completed. Link to the
-      T-number and any D-numbers. Use the next sequential C-number. Include
-      the Files: field listing files created or modified.
-
-2e. READ INBOX.md between tasks — check for new human messages.
-    Process any new messages, mark as read.
-    If a message contradicts the current plan or an in-progress task:
-    - Complete governance cleanup for work already done
-    - Write HANDOVER note explaining the contradiction
-    - Exit BLOCKED
-
-2f. CAPACITY CHECK:
-    Estimate context window usage.
-    - If sufficient capacity AND next eligible task is appropriate → loop to 2a
-    - If low capacity OR next task is complex → proceed to Step 5 (exit)
-    When in doubt, exit — clean handover beats running out of context.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 3 — TACTICAL DECOMPOSITION (when picking up a Tier 1 task)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-3a. Read the plan file (PLAN_FILE) and any relevant bounded context docs
-    referenced in the plan (data models, module definitions, published language).
-
-3b. Generate tactical tasks:
-    - Each gets the next sequential T-number
-    - Set Tier: 2, Parent: <strategic task T-number>
-    - Set Depends: links where execution order matters
-    - Set Status: OPEN
-    - Write them into TODO.md under the current tasks section
-
-3c. DECOMPOSITION REVIEW (internal consistency):
-    - Are the tasks collectively sufficient to satisfy the parent strategic task?
-    - Are dependencies correctly ordered (no circular refs)?
-    - Is there overlap or duplication between tasks?
-    - Maximum 2 retries if issues found. If still failing → mark strategic task
-      BLOCKED with diagnostic note and exit the decomposition.
-
-3d. PLAN COHERENCE CHECK (external validation):
-    - Does the decomposition align with the strategic plan's goals/constraints?
-    - Is it consistent with the bounded context's data model and module definition?
-    - Do naming choices follow PUBLISHED-LANGUAGE.md?
-    - Are cross-context dependencies accounted for?
-    - Does the work fit the project's current phase?
-    Outcomes:
-    - Pass → execute first tactical task immediately
-    - Scope expansion detected → flag in INBOX.md, continue with safe subset
-      (tasks directly implied by the plan). Write excluded tasks as PROPOSED
-      with a note referencing the INBOX flag.
-    - Fundamentally incoherent → mark strategic task BLOCKED, exit BLOCKED
-
-3e. If a tactical task proves more complex than expected during execution,
-    decompose it further into Tier 3 (tertiary) tasks using the same pattern.
-    Three tiers is the maximum — if a fourth level would be needed, mark
-    BLOCKED (the strategic plan was too ambitious for a single task).
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 4 — CODEWRITING LOOP (inner loop for implementation tasks)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-For each tactical or tertiary task that involves code changes:
-
-4a. GENERATE TASK AC
-    Read standing-ac.md (STANDING_AC_FILE from config).
-    Write task-level acceptance criteria as children under the standing AC
-    categories. Record them in the task detail in TODO.md before implementation.
-
-4b. WRITE CODE
-    Read toolchain.md (TOOLCHAIN_FILE from config) for build, test, and
-    capture commands and conventions.
-    Implement the component/hook/screen/query/migration.
-
-4c. CODE REVIEW (mandatory self-review pass)
-    Re-read every file created or modified for this task.
-    Check for: missing imports, wrong variable names, hardcoded values that
-    should reference constants/config, unclosed tags/brackets, incorrect
-    function signatures, props that don't match interfaces, SQL column names
-    that don't match the schema, incorrect platform-specific code.
-    Run the build command from toolchain.md to confirm compilation.
-    Produce an issue list with severity ratings.
-
-4d. CONDITIONAL SECOND PASS
-    If code review found issues:
-    - Fix all issues
-    - Re-run code review
-    If clean (or clean after fix) → continue to UI test.
-
-4e. UI TEST (if applicable — skip for non-UI tasks)
-    Read toolchain.md for the exact serve and capture commands.
-    a. Ensure dev server is running (start command from toolchain).
-       If it fails to start → mark task BLOCKED ("build failed"), exit loop.
-    b. Run the capture/test tool at the viewport specified in toolchain.
-       If the tool crashes → mark task BLOCKED ("UI test infra failure"), exit loop.
-    c. Navigate to the screen under test.
-    d. Two feedback channels:
-       - Visual: screenshot capture → analyse layout/styling
-       - Structural: DOM query via data-testid → assert elements present
-    e. Data verification: query database to confirm data operations if applicable.
-    f. Evaluate against Standing AC + Task AC.
-
-4f. DEBUG PASS (maximum 3 iterations)
-    If failures detected at 4e:
-    - Diagnose: layout error vs logic error vs state error
-    - Fix root cause
-    - Loop back to 4e (UI test)
-    If all acceptance criteria pass:
-    - Task is done — exit codewriting loop, return to task loop step 2d
-    If 3 debug iterations exhausted without passing:
-    - Mark task BLOCKED with diagnostic note listing what was attempted
-    - Write partial CHANGELOG entry noting the attempts
-    - Exit codewriting loop, return to task loop step 2d
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 5 — STATE FILE UPDATES (before exiting)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-5a. Run /compact to free context.
-
-5b. TODO.md: verify all tasks you completed this session show Status: COMPLETE
-    with T-numbers. Ensure any decomposed tasks are written with correct Tier,
-    Parent, Depends, and Status fields.
-
-5c. DECISIONS.md: add D-numbered entries for all choices made this session.
-    Each entry must include: Date, Status (ACTIVE), Context (bounded context
-    code if applicable), Detail, and Alternatives considered.
-
-5d. CHANGELOG.md: add C-numbered entries for all changes made this session.
-    Each entry must include: Date, Task (T-number), Decision (D-numbers if
-    applicable), Type (FEATURE/FIX/REFACTOR/CONFIG/DOCS), Files (list of
-    files touched), Summary.
-
-5e. HANDOVER.md: overwrite with:
-    - What was accomplished (T-numbers completed, D-numbers recorded)
-    - What's next (next eligible task by T-number, brief description)
-    - Gotchas or context the next session needs
-    - Model recommendation: model:effort (default opus:high — only downgrade
-      to sonnet:medium for mechanical tasks like config changes, simple file
-      moves, or status updates). Valid effort values: low, medium, high, max.
-    - Note: this was a RECOVERY session — mention any repairs made in Step 0
-
-5f. .orchestra/COMMIT_MSG: write a single-line commit message, max 68 chars.
-    Reference T-numbers where possible. Example:
-    "Build PostCard component with tag display (T042)"
-
-5g. Check if any governance file exceeds its archiving threshold. If so, read
-    the protocol file (TODO_PROTOCOL, DECISIONS_PROTOCOL, or CHANGELOG_PROTOCOL
-    from config) and perform the archive as a housekeeping step.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 6 — EXIT SIGNAL
+EXIT SIGNAL
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Your final output line must be EXACTLY one of these three words:
-- HANDOVER — you completed one or more tasks but eligible tasks remain
-- COMPLETE — all tasks in TODO are COMPLETE
+- HANDOVER — you completed one or more tasks but assigned tasks remain
+- COMPLETE — all assigned tasks are done
 - BLOCKED — you need human input (reason written to INBOX.md and HANDOVER.md)
 PROMPT_EOF
 
@@ -866,7 +417,46 @@ stop_ram_monitor() {
     fi
 }
 
-trap 'stop_ram_monitor; restore_settings; cleanup_lock; rm -f "$QUOTA_STATE_FILE"' EXIT
+sync_governance_from_worktree() {
+    # Copy governance files from worktree back to main tree so the orchestrator
+    # can check task completion status. The worktree has its own copies of these
+    # files (from the branch), and the session updates them there.
+    if [ -n "${WORKTREE_DIR:-}" ] && [ -d "${WORKTREE_DIR:-}" ]; then
+        for gov_file in "$TODO_FILE" "$DECISIONS_FILE" "$CHANGELOG_FILE"; do
+            local relative="${gov_file#$PROJECT_DIR/}"
+            local worktree_copy="$WORKTREE_DIR/$relative"
+            if [ -f "$worktree_copy" ]; then
+                cp "$worktree_copy" "$gov_file"
+            fi
+        done
+        # Also sync HANDOVER and INBOX
+        for op_file in HANDOVER.md INBOX.md; do
+            if [ -f "$WORKTREE_DIR/.orchestra/$op_file" ]; then
+                cp "$WORKTREE_DIR/.orchestra/$op_file" "$STATE_DIR/$op_file"
+            fi
+        done
+    fi
+}
+
+cleanup_worktree() {
+    if [ -n "${WORKTREE_DIR:-}" ] && [ -d "${WORKTREE_DIR:-}" ]; then
+        cd "$PROJECT_DIR"
+        # Sync governance changes back to main tree before cleanup
+        sync_governance_from_worktree
+        # Push any branches the session created
+        local branches
+        branches=$(git -C "$WORKTREE_DIR" branch --list 'orchestra/*' 2>/dev/null | tr -d ' *' || true)
+        for branch in $branches; do
+            git push origin "$branch" 2>/dev/null && notify "   Pushed branch: $branch" || true
+        done
+        git worktree remove --force "$WORKTREE_DIR" 2>/dev/null || rm -rf "$WORKTREE_DIR"
+        # Clean up the session branch (the worktree's own branch, not task branches)
+        git branch -D "${WORKTREE_BRANCH:-}" 2>/dev/null || true
+        notify "   Worktree cleaned up: $WORKTREE_DIR"
+    fi
+}
+
+trap 'cleanup_worktree; stop_ram_monitor; cleanup_lock; rm -f "$QUOTA_STATE_FILE"' EXIT
 start_ram_monitor
 
 # ─── Main loop state ─────────────────────────────────────────────────────────
@@ -879,8 +469,7 @@ USE_RECOVERY_PROMPT=false
 
 notify "Orchestrator started at $START_TIME"
 notify "   Project: $(basename "$PROJECT_DIR")"
-INITIAL_OPEN=$(grep -c 'Status:.*OPEN' "$TODO_FILE" 2>/dev/null) || INITIAL_OPEN=0
-notify "   Tasks: $INITIAL_OPEN open in $TODO_FILE"
+notify "   Assigned tasks: $TASKS"
 notify "   Max sessions: $MAX_SESSIONS | Max consecutive crashes: $MAX_CONSECUTIVE_CRASHES"
 if [ "$QUOTA_PACING" = "true" ]; then
     notify "   Quota pacing: ON (threshold: ${QUOTA_THRESHOLD}%)"
@@ -905,34 +494,46 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
         notify "Starting session $SESSION_COUNT/$MAX_SESSIONS"
     fi
 
-    # Snapshot state files before the session runs
+    # ─── Worktree setup ─────────────────────────────────────────────────────
+    # Create a fresh worktree so the main working tree stays on main.
+    # The session creates task branches within the worktree.
+    WORKTREE_DIR="${WORKTREE_BASE:-/tmp/orchestra-$(basename "$PROJECT_DIR")}/session-$(printf '%03d' $SESSION_COUNT)"
+    WORKTREE_BRANCH="orchestra/session-$(printf '%03d' $SESSION_COUNT)-$SESSION_TIMESTAMP"
+
+    # Clean up any stale worktree at this path
+    if [ -d "$WORKTREE_DIR" ]; then
+        git -C "$PROJECT_DIR" worktree remove --force "$WORKTREE_DIR" 2>/dev/null || rm -rf "$WORKTREE_DIR"
+    fi
+
+    # Ensure we're branching from latest main
+    git -C "$PROJECT_DIR" fetch origin main 2>/dev/null || true
+    git -C "$PROJECT_DIR" worktree add "$WORKTREE_DIR" -b "$WORKTREE_BRANCH" origin/main 2>/dev/null \
+        || git -C "$PROJECT_DIR" worktree add "$WORKTREE_DIR" -b "$WORKTREE_BRANCH" main
+    notify "   Worktree: $WORKTREE_DIR (branch: $WORKTREE_BRANCH)"
+
+    # Snapshot state files before the session runs (from worktree)
+    cd "$WORKTREE_DIR"
     PRE_STATE=$(snapshot_state_files)
 
     # ─── Model selection ─────────────────────────────────────────────────────
-    # v2: Default opus:high. Only downgrade for mechanical tasks.
-    RECOMMENDED_MODEL="opus"
-    RECOMMENDED_EFFORT="high"
+    # Model and effort come from config file. No env var overrides.
+    # HANDOVER can still recommend a downgrade for the next session.
+    RECOMMENDED_MODEL="${MODEL:-opus}"
+    RECOMMENDED_EFFORT="${EFFORT:-high}"
 
     if [ -f "$STATE_DIR/HANDOVER.md" ]; then
         REC_LINE=$(grep -i 'model recommendation' "$STATE_DIR/HANDOVER.md" | tail -1 || echo "")
         if echo "$REC_LINE" | grep -qi 'sonnet'; then
             RECOMMENDED_MODEL="sonnet"
         fi
-        if echo "$REC_LINE" | grep -qi 'standard'; then
+        if echo "$REC_LINE" | grep -qi 'medium'; then
             RECOMMENDED_EFFORT="medium"
         fi
     fi
 
-    # First session override via env var
-    if [ "$SESSION_COUNT" -eq 1 ] && [ -n "${INITIAL_MODEL:-}" ]; then
-        RECOMMENDED_MODEL="${INITIAL_MODEL}"
-        notify "   Model: ${INITIAL_MODEL} (INITIAL_MODEL override)"
-    fi
-
-    # Map effort labels to valid CLI values (low, medium, high, max)
+    # Map effort labels to valid CLI values
     case "$RECOMMENDED_EFFORT" in
         low|medium|high|max) ;; # already valid
-        standard) RECOMMENDED_EFFORT="medium" ;;
         *) notify "   WARNING: unknown effort '${RECOMMENDED_EFFORT}', defaulting to high"
            RECOMMENDED_EFFORT="high" ;;
     esac
@@ -944,8 +545,10 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
     # ─── Run Claude Code in headless mode ─────────────────────────────────────
     # stream-json goes to the log file for full metadata;
     # a jq filter extracts readable text for the terminal.
+    # Session runs in the worktree directory, not the main working tree.
 
     set +eo pipefail
+    cd "$WORKTREE_DIR"
     claude -p "$CURRENT_PROMPT" \
         $MODEL_FLAG \
         $EFFORT_FLAG \
@@ -976,6 +579,9 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
         TOTAL_CRASHES=$((TOTAL_CRASHES + 1))
         notify "Session $SESSION_COUNT crashed (exit $EXIT_CODE). Consecutive: $CONSECUTIVE_CRASHES/$MAX_CONSECUTIVE_CRASHES"
 
+        # Sync governance from worktree before checking state
+        sync_governance_from_worktree
+
         if state_files_changed "$PRE_STATE"; then
             # v2 INVERSION: v1 treated governance-changed as safe (USE_RECOVERY_PROMPT=false).
             # v2 treats it as needing damage assessment because governance may be
@@ -1002,10 +608,16 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
             exit 1
         fi
 
+        cleanup_worktree
+        cd "$PROJECT_DIR"
         notify "   Retrying in ${CRASH_COOLDOWN_SECONDS}s..."
         sleep "$CRASH_COOLDOWN_SECONDS"
         continue
     fi
+
+    # ─── Sync governance from worktree and clean up ─────────────────────────
+    sync_governance_from_worktree
+    cd "$PROJECT_DIR"
 
     # ─── Session exited cleanly (exit code 0) ─────────────────────────────────
 
@@ -1035,13 +647,22 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
     # ─── Evaluate exit signal ─────────────────────────────────────────────────
 
     if echo "$FINAL" | grep -qi "COMPLETE"; then
-        # Double-check: does TODO.md actually have no remaining tasks?
-        REMAINING=$(grep -c 'Status:.*OPEN' "$TODO_FILE" 2>/dev/null) || REMAINING=0
+        # Double-check: are all assigned tasks marked COMPLETE in TODO.md?
+        REMAINING=0
+        IFS=',' read -ra TASK_LIST <<< "$TASKS"
+        for tn in "${TASK_LIST[@]}"; do
+            tn=$(echo "$tn" | xargs)
+            if grep -A5 "### $tn" "$TODO_FILE" 2>/dev/null | grep -q 'Status:.*COMPLETE'; then
+                : # done
+            else
+                REMAINING=$((REMAINING + 1))
+            fi
+        done
         if [ "$REMAINING" -eq 0 ]; then
-            notify "All tasks completed after $SESSION_COUNT sessions! ($TOTAL_CRASHES crashes recovered)"
+            notify "All assigned tasks completed after $SESSION_COUNT sessions! ($TOTAL_CRASHES crashes recovered)"
             exit 0
         else
-            notify "Claude signalled COMPLETE but $REMAINING tasks remain. Continuing..."
+            notify "Claude signalled COMPLETE but $REMAINING assigned tasks remain. Continuing..."
         fi
     fi
 
@@ -1051,20 +672,41 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
         exit 2
     fi
 
-    # Check TODO.md for remaining tasks (source of truth, regardless of signal)
-    REMAINING=$(grep -c 'Status:.*OPEN' "$TODO_FILE" 2>/dev/null) || REMAINING=0
+    # Check assigned tasks for completion (source of truth, regardless of signal)
+    REMAINING=0
+    IFS=',' read -ra TASK_LIST <<< "$TASKS"
+    for tn in "${TASK_LIST[@]}"; do
+        tn=$(echo "$tn" | xargs)
+        if grep -A5 "### $tn" "$TODO_FILE" 2>/dev/null | grep -q 'Status:.*COMPLETE'; then
+            : # done
+        else
+            REMAINING=$((REMAINING + 1))
+        fi
+    done
 
     if [ "$REMAINING" -eq 0 ]; then
-        notify "No remaining tasks in .orchestra/TODO.md after $SESSION_COUNT sessions."
+        notify "All assigned tasks completed after $SESSION_COUNT sessions."
         exit 0
     fi
 
-    notify "Session $SESSION_COUNT handed over. $REMAINING tasks remain. Next in ${COOLDOWN_SECONDS}s..."
+    # Clean up worktree before starting next session
+    cleanup_worktree
+
+    notify "Session $SESSION_COUNT handed over. $REMAINING assigned tasks remain. Next in ${COOLDOWN_SECONDS}s..."
     sleep "$COOLDOWN_SECONDS"
 done
 
 # ─── Max sessions reached ─────────────────────────────────────────────────────
 
-REMAINING=$(grep -c 'Status:.*OPEN' "$TODO_FILE" 2>/dev/null) || REMAINING=0
-notify "Reached max session limit ($MAX_SESSIONS). $REMAINING tasks remain. $TOTAL_CRASHES crashes recovered."
+REMAINING=0
+IFS=',' read -ra TASK_LIST <<< "$TASKS"
+for tn in "${TASK_LIST[@]}"; do
+    tn=$(echo "$tn" | xargs)
+    if grep -A5 "### $tn" "$TODO_FILE" 2>/dev/null | grep -q 'Status:.*COMPLETE'; then
+        : # done
+    else
+        REMAINING=$((REMAINING + 1))
+    fi
+done
+notify "Reached max session limit ($MAX_SESSIONS). $REMAINING assigned tasks remain. $TOTAL_CRASHES crashes recovered."
 exit 3
