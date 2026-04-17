@@ -36,7 +36,7 @@ chmod +x "$PROJECT_DIR/.orchestra/bin/orchestra" "$PROJECT_DIR/.orchestra/bin/or
 chmod +x "$PROJECT_DIR/.orchestra/hooks/stage-changes.sh"
 
 # Copy templates (only if files don't already exist — don't overwrite customisations)
-for f in config HANDOVER.md INBOX.md README.md toolchain.md; do
+for f in config config.test HANDOVER.md INBOX.md README.md toolchain.md; do
     if [ ! -f "$PROJECT_DIR/.orchestra/$f" ]; then
         cp "$REPO_DIR/templates/$f" "$PROJECT_DIR/.orchestra/$f"
         echo "   Created .orchestra/$f"
@@ -44,6 +44,18 @@ for f in config HANDOVER.md INBOX.md README.md toolchain.md; do
         echo "   Skipped .orchestra/$f (already exists)"
     fi
 done
+
+# .orchestra/CLAUDE.md (autonomous session rules)
+if [ ! -f "$PROJECT_DIR/.orchestra/CLAUDE.md" ]; then
+    cp "$REPO_DIR/templates/orchestra-CLAUDE.md" "$PROJECT_DIR/.orchestra/CLAUDE.md"
+    echo "   Created .orchestra/CLAUDE.md"
+fi
+
+# Test fixtures (.orchestra/test/) — for `orchestra test` integration test
+if [ ! -d "$PROJECT_DIR/.orchestra/test" ]; then
+    cp -r "$REPO_DIR/templates/test" "$PROJECT_DIR/.orchestra/test"
+    echo "   Created .orchestra/test/ (fixtures for orchestra test)"
+fi
 
 # Set up .claude/settings.json (staging hook only, project-local path)
 if [ ! -f "$PROJECT_DIR/.claude/settings.json" ]; then
