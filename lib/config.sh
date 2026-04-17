@@ -6,10 +6,11 @@
 
 load_orchestra_config() {
     local project_dir="$1"
-    local config_file="$project_dir/.orchestra/config"
+    # Allow test harness to override the config file via ORCHESTRA_CONFIG env var
+    local config_file="${ORCHESTRA_CONFIG:-$project_dir/.orchestra/config}"
 
     if [ ! -f "$config_file" ]; then
-        echo "ERROR: .orchestra/config not found. Run 'orchestra init' first." >&2
+        echo "ERROR: config file not found: $config_file" >&2
         return 1
     fi
 
