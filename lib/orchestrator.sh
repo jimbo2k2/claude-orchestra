@@ -424,9 +424,9 @@ stop_ram_monitor() {
 }
 
 sync_governance_from_worktree() {
-    # Copy governance files from worktree back to main tree so the orchestrator
-    # can check task completion status. The worktree has its own copies of these
-    # files (from the branch), and the session updates them there.
+    # Copy governance files and session workspaces from worktree back to main tree.
+    # Governance: so the orchestrator can check task completion status.
+    # Session workspaces: preserved for audit trail of Orchestra's tactical decomposition.
     if [ -n "${WORKTREE_DIR:-}" ] && [ -d "${WORKTREE_DIR:-}" ]; then
         for gov_file in "$TODO_FILE" "$DECISIONS_FILE" "$CHANGELOG_FILE"; do
             local relative="${gov_file#$PROJECT_DIR/}"
@@ -441,6 +441,18 @@ sync_governance_from_worktree() {
                 cp "$WORKTREE_DIR/.orchestra/$op_file" "$STATE_DIR/$op_file"
             fi
         done
+        # Sync task workspaces (.orchestra/sessions/<T-number>/) for audit trail.
+        # Each T-number subdirectory contains tasks.md + log.md from the session's
+        # tactical decomposition. Untracked in the worktree, so copy them over.
+        if [ -d "$WORKTREE_DIR/.orchestra/sessions" ]; then
+            for task_dir in "$WORKTREE_DIR/.orchestra/sessions"/T*/; do
+                [ -d "$task_dir" ] || continue
+                local task_name
+                task_name=$(basename "$task_dir")
+                mkdir -p "$STATE_DIR/sessions/$task_name"
+                cp -r "$task_dir"* "$STATE_DIR/sessions/$task_name/" 2>/dev/null || true
+            done
+        fi
     fi
 }
 
