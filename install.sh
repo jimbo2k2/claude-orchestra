@@ -31,8 +31,6 @@ cp "$REPO_DIR/bin/orchestra" "$PROJECT_DIR/.orchestra/bin/orchestra"
 cp "$REPO_DIR/lib/orchestrator.sh" "$PROJECT_DIR/.orchestra/bin/orchestrator.sh"
 cp "$REPO_DIR/lib/stage-changes.sh" "$PROJECT_DIR/.orchestra/hooks/stage-changes.sh"
 cp "$REPO_DIR/lib/config.sh" "$PROJECT_DIR/.orchestra/lib/config.sh"
-cp "$REPO_DIR/lib/verify-completion.sh" "$PROJECT_DIR/.orchestra/lib/verify-completion.sh"
-cp "$REPO_DIR/lib/commit-and-update.sh" "$PROJECT_DIR/.orchestra/lib/commit-and-update.sh"
 
 chmod +x "$PROJECT_DIR/.orchestra/bin/orchestra" "$PROJECT_DIR/.orchestra/bin/orchestrator.sh"
 chmod +x "$PROJECT_DIR/.orchestra/hooks/stage-changes.sh"
