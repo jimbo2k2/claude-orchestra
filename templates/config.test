@@ -1,0 +1,46 @@
+# .orchestra/config.test — Orchestra integration test configuration
+# Invoked by `orchestra test`. Committed to the repo so worktrees inherit it.
+#
+# Test tasks T9998 + T9999 are added to the real TODO.md at test invocation
+# time (as a throwaway commit on the current branch), so the worktree sees
+# them. After the test, the user can inspect the session branch and revert
+# the test-prep commit from main when satisfied.
+
+# ─── Task Queue ──────────────────────────────────────────────────────────────
+TASKS=T9998,T9999
+
+# ─── Session Limits ──────────────────────────────────────────────────────────
+MAX_SESSIONS=3
+MAX_CONSECUTIVE_CRASHES=2
+
+# ─── Quota Pacing ────────────────────────────────────────────────────────────
+# Disabled for test — we want a fast run
+QUOTA_PACING=false
+QUOTA_THRESHOLD=80
+QUOTA_POLL_INTERVAL=120
+
+# ─── Cooldowns (seconds) ─────────────────────────────────────────────────────
+COOLDOWN_SECONDS=3
+CRASH_COOLDOWN_SECONDS=3
+
+# ─── Model ───────────────────────────────────────────────────────────────────
+MODEL=opus
+EFFORT=high
+
+# ─── Governance Paths ────────────────────────────────────────────────────────
+# Same as production config — test tasks live in the real TODO.md
+TODO_FILE=TODO/TODO.md
+DECISIONS_FILE=Decisions/DECISIONS.md
+CHANGELOG_FILE=Changelog/CHANGELOG.md
+
+# ─── Protocol ────────────────────────────────────────────────────────────────
+DEVELOPMENT_PROTOCOL=DEVELOPMENT-PROTOCOL.md
+
+# ─── Toolchain ───────────────────────────────────────────────────────────────
+TOOLCHAIN_FILE=.orchestra/toolchain.md
+
+# ─── Worktree ────────────────────────────────────────────────────────────────
+WORKTREE_BASE=/tmp/orchestra-test
+
+# ─── Tmux ────────────────────────────────────────────────────────────────────
+TMUX_SESSION=orchestra-test

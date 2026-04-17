@@ -409,286 +409,166 @@ cmd_status() {
 }
 
 # ─── test ────────────────────────────────────────────────────────────────────
-# Full integration smoke test — exercises the orchestrator loop with 2 forced sessions.
-# Uses a hardcoded override config (.orchestra/config.test) so the real config is untouched.
-# Two synthetic tasks (T9998, T9999) force a handover between sessions to prove:
-#   - Worktree creation + cleanup per session
-#   - Branch-off-a-branch model (session branch accumulates task work)
-#   - Governance + workspace sync across sessions
-#   - HANDOVER flow and recovery of state in session 2
-#   - Final COMPLETE signal when all assigned tasks done
+# Integration test — exercises the orchestrator loop end-to-end.
+#
+# How it works:
+#   1. Reads config from .orchestra/config.test (not .orchestra/config)
+#   2. Adds synthetic T9998 + T9999 entries to the real TODO.md on current branch
+#      (as a throwaway commit — you can revert it after inspecting results)
+#   3. Runs the orchestrator normally — same code path as `orchestra run`
+#   4. Injects a forced-handover INBOX message so session 1 hands over after T9998
+#      and session 2 picks up T9999, proving the session boundary + branch
+#      accumulation flow
+#   5. The resulting session branch is pushed to remote for your inspection
+#
+# After the test:
+#   - Inspect the session branch (pushed to remote) — you can clone/test/merge it
+#   - Revert the test-prep commit from main when satisfied (instructions printed)
 
 cmd_test() {
     local project_dir
     project_dir="$(git rev-parse --show-toplevel 2>/dev/null)" || die "Not in a git repository"
 
     [ -d "$project_dir/.orchestra" ] || die ".orchestra/ not found."
+    [ -f "$project_dir/.orchestra/config.test" ] || \
+        die ".orchestra/config.test not found. It should be committed to the repo."
 
     echo "==========================================="
-    echo "Orchestra integration smoke test"
+    echo "Orchestra integration test"
     echo "==========================================="
     echo ""
-    echo "Exercises: orchestrator loop, worktree lifecycle,"
-    echo "branch-off-a-branch model, handover + recovery,"
-    echo "governance sync, completion signal."
+    echo "Approach:"
+    echo "  1. Adds T9998 + T9999 to TODO.md on current branch (throwaway commit)"
+    echo "  2. Runs orchestra with .orchestra/config.test"
+    echo "  3. Session 1 completes T9998, hands over (forced via INBOX)"
+    echo "  4. Session 2 completes T9999"
+    echo "  5. Session branches preserved locally + pushed to remote for inspection"
     echo ""
 
-    # ─── Test fixtures ─────────────────────────────────────────────────────
-    _TEST_PROJECT_DIR="$project_dir"
-    _TEST_CONFIG="$project_dir/.orchestra/config.test"
-    _TEST_TODO="$project_dir/.orchestra/TODO.test.md"
-    _TEST_STATE_DIR="$project_dir/.orchestra/state-test"
-    _TEST_SESSION_BRANCHES_FILE="$project_dir/.orchestra/.test-branches"
-    _TEST_TMUX="${TMUX_SESSION_TEST:-orchestra-test}"
+    local test_tmux="orchestra-test"
+    tmux has-session -t "$test_tmux" 2>/dev/null && \
+        die "tmux session '$test_tmux' already exists. Kill it first: tmux kill-session -t $test_tmux"
 
-    # ─── Cleanup function ──────────────────────────────────────────────────
-    cleanup_integration_test() {
-        echo ""
-        echo "Cleaning up integration test..."
-        cd "$_TEST_PROJECT_DIR" 2>/dev/null || true
+    # ─── Step 1: Add test tasks to TODO.md ──────────────────────────────────
+    local test_timestamp
+    test_timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "Adding T9998 + T9999 to TODO.md..."
 
-        # Kill the test tmux session if still running
-        tmux kill-session -t "$_TEST_TMUX" 2>/dev/null || true
+    cat >> "$project_dir/TODO/TODO.md" <<TODOEOF
 
-        # Remove any test worktrees
-        for wt in $(git worktree list --porcelain 2>/dev/null | grep '^worktree.*orchestra-test' | awk '{print $2}'); do
-            git worktree remove --force "$wt" 2>/dev/null || rm -rf "$wt"
-        done
-        rm -rf "${WORKTREE_BASE_TEST:-/tmp/orchestra-test}" 2>/dev/null
+### T9998 — Orchestra integration test task 1
 
-        # Return to a safe branch before deleting the fixtures branch
-        local current_branch
-        current_branch=$(git branch --show-current 2>/dev/null)
-        if [ "$current_branch" = "$_TEST_FIXTURES_BRANCH" ]; then
-            git checkout main 2>/dev/null || git checkout - 2>/dev/null
-        fi
+- **Module:** Test (disposable)
+- **Status:** \`[ ]\` OPEN
+- **Added:** $test_timestamp
+- **Detail:** Append the line \`# Test session 1: $test_timestamp\` to \`.orchestra/test-artifacts.md\` (create if missing). This verifies session 1 executes and commits. Mark COMPLETE in TODO.md, write a C-entry in CHANGELOG.md.
+- **AC:**
+  - [ ] File \`.orchestra/test-artifacts.md\` contains the session 1 marker line
 
-        # Delete test branches
-        [ -n "${_TEST_FIXTURES_BRANCH:-}" ] && git branch -D "$_TEST_FIXTURES_BRANCH" 2>/dev/null || true
+### T9999 — Orchestra integration test task 2
 
-        # Clean up any stray test task/session branches by prefix
-        for branch in $(git branch --list 'orchestra/t999*' --list 'orchestra/session-*' 2>/dev/null | tr -d ' *'); do
-            [ -n "$branch" ] && git branch -D "$branch" 2>/dev/null || true
-        done
-
-        # Remove test fixture files (from working tree — the branch with them was deleted)
-        rm -f "$_TEST_CONFIG" "$_TEST_TODO"
-        rm -rf "$_TEST_STATE_DIR"
-
-        echo "Integration test cleaned up."
-    }
-    trap cleanup_integration_test EXIT INT TERM
-
-    # ─── Create a throwaway test-fixtures branch with synthetic tasks ──────
-    # The worktree will branch from this so T9998/T9999 exist in the worktree.
-    _TEST_FIXTURES_BRANCH="orchestra-test-fixtures-$(date -u +%Y%m%d-%H%M%S)"
-    local original_branch
-    original_branch=$(git -C "$project_dir" branch --show-current)
-
-    # Create a commit with synthetic fixtures on a new branch
-    git -C "$project_dir" checkout -b "$_TEST_FIXTURES_BRANCH" 2>/dev/null || \
-        die "Could not create test fixtures branch"
-
-    cat > "$_TEST_TODO" <<'TODOEOF'
-# Test TODO (orchestra integration test)
-
-### T9998 — Smoke test task 1
-
-- **Module:** Test
-- **Status:** `[ ]` OPEN
-- **Detail:** Append a line `# Test session 1: <timestamp>` to `.orchestra/test-artifacts.md`. Create the file if it doesn't exist.
-
-### T9999 — Smoke test task 2
-
-- **Module:** Test
-- **Status:** `[ ]` OPEN
-- **Detail:** Append a line `# Test session 2: <timestamp>` to `.orchestra/test-artifacts.md`. The file should already exist from T9998 — verify this as proof the session branch accumulated T9998's work.
+- **Module:** Test (disposable)
+- **Status:** \`[ ]\` OPEN
+- **Added:** $test_timestamp
+- **Detail:** Append the line \`# Test session 2: $test_timestamp\` to \`.orchestra/test-artifacts.md\`. The file should already exist from T9998 — if it doesn't, the session-branch accumulation failed; flag BLOCKED.
+- **AC:**
+  - [ ] File \`.orchestra/test-artifacts.md\` contains BOTH session markers
 TODOEOF
 
-    cat > "$_TEST_CONFIG" <<CONFIGEOF
-# Test config — drives orchestra through a 2-session integration test
-TASKS=T9998,T9999
-MAX_SESSIONS=3
-MAX_CONSECUTIVE_CRASHES=2
-QUOTA_PACING=false
-COOLDOWN_SECONDS=3
-CRASH_COOLDOWN_SECONDS=3
-MODEL=opus
-EFFORT=high
-TODO_FILE=.orchestra/TODO.test.md
-DECISIONS_FILE=.orchestra/TODO.test.md
-CHANGELOG_FILE=.orchestra/TODO.test.md
-DEVELOPMENT_PROTOCOL=DEVELOPMENT-PROTOCOL.md
-TOOLCHAIN_FILE=.orchestra/toolchain.md
-WORKTREE_BASE=/tmp/orchestra-test
-TMUX_SESSION=$_TEST_TMUX
-CONFIGEOF
+    git -C "$project_dir" add TODO/TODO.md
+    git -C "$project_dir" commit -m "test: add T9998 + T9999 for orchestra integration test (throwaway)" --no-verify 2>/dev/null || \
+        die "Could not commit test tasks to TODO.md"
 
-    # INBOX with forced-handover instruction
-    mkdir -p "$_TEST_STATE_DIR"
-    cat > "$_TEST_STATE_DIR/INBOX.md" <<'INBOXEOF'
-# Inbox (test)
+    local prep_commit
+    prep_commit=$(git -C "$project_dir" rev-parse HEAD)
+    echo "Test-prep commit: $prep_commit"
 
-## Messages
+    # ─── Step 2: Inject forced-handover INBOX message ───────────────────────
+    echo "Injecting forced-handover INBOX message..."
+    local tmp_inbox
+    tmp_inbox=$(mktemp)
+    awk '
+        /^## Processed/ && !done {
+            print "**ORCHESTRA TEST — forced handover.** This is an integration test. After completing T9998 (the first test task), you MUST write HANDOVER and exit — do not start T9999. This forces a session boundary to verify session 2 picks up T9999 from the accumulated session branch. Move this message to Processed before exiting."
+            print ""
+            done=1
+        }
+        { print }
+        END {
+            if (!done) {
+                print ""
+                print "## Processed"
+                print "**ORCHESTRA TEST — forced handover.** (added by orchestra test — see above)"
+            }
+        }
+    ' "$project_dir/.orchestra/INBOX.md" > "$tmp_inbox"
+    mv "$tmp_inbox" "$project_dir/.orchestra/INBOX.md"
 
-**SMOKE TEST OVERRIDE:** This is an integration smoke test. After completing T9998, you MUST write HANDOVER and exit — do not start T9999. This forces a session boundary so we can verify session 2 picks up T9999 cleanly. Move this message to Processed before exiting.
-
-## Processed
-INBOXEOF
-
-    cat > "$_TEST_STATE_DIR/HANDOVER.md" <<'HOEOF'
-# Handover (test)
-
-## Initial state
-
-This is an Orchestra integration smoke test. Two synthetic tasks (T9998, T9999) will be processed across two forced sessions to verify:
-- Branch-off-a-branch model
-- Worktree cleanup + recreation between sessions
-- Governance/workspace sync
-- HANDOVER flow and resumption
-
-Session 1 will be instructed via INBOX to complete only T9998 then hand over.
-HOEOF
-
-    # Commit fixtures to the test branch so the worktree inherits them
-    git -C "$project_dir" add "$_TEST_TODO" "$_TEST_CONFIG" "$_TEST_STATE_DIR"/ 2>/dev/null
-    git -C "$project_dir" commit -m "test: orchestra integration test fixtures" --no-verify 2>/dev/null \
-        || die "Could not commit test fixtures"
-
-    # Return to original branch so worktree has a clean base to branch from
-    git -C "$project_dir" checkout "$original_branch" 2>/dev/null || true
-
-    echo "Test fixtures committed to branch: $_TEST_FIXTURES_BRANCH"
+    # ─── Step 3: Run the orchestrator with the test config ──────────────────
     echo ""
-    echo "Launching orchestrator with test config..."
-    echo "Attach to watch: tmux attach -t $_TEST_TMUX"
+    echo "Starting orchestrator with .orchestra/config.test..."
+    echo "Watch: tmux attach -t $test_tmux"
     echo ""
 
-    # ─── Run the orchestrator with the override config ─────────────────────
-    # ORCHESTRA_FIXTURES_BRANCH makes the orchestrator branch worktrees from the test
-    # fixtures branch instead of origin/main
-    tmux has-session -t "$_TEST_TMUX" 2>/dev/null && \
-        die "tmux session '$_TEST_TMUX' already exists. Kill it first: tmux kill-session -t $_TEST_TMUX"
-
-    tmux new-session -d -s "$_TEST_TMUX" \
+    tmux new-session -d -s "$test_tmux" \
         "cd $project_dir && \
-         STATE_DIR=$_TEST_STATE_DIR \
-         ORCHESTRA_CONFIG=$_TEST_CONFIG \
-         ORCHESTRA_FIXTURES_BRANCH=$_TEST_FIXTURES_BRANCH \
+         ORCHESTRA_CONFIG=$project_dir/.orchestra/config.test \
          bash $project_dir/.orchestra/bin/orchestrator.sh; \
          echo ''; echo 'Test orchestrator exited. Press any key to close.'; read -n1"
 
-    echo "Orchestra test session started in tmux '$_TEST_TMUX'."
-    echo "Watch: tmux attach -t $_TEST_TMUX"
-    echo ""
     echo "Waiting for completion (max 15 minutes)..."
 
-    # Poll until tmux session ends
     local elapsed=0
     local max_wait=900
-    while tmux has-session -t "$_TEST_TMUX" 2>/dev/null; do
+    while tmux has-session -t "$test_tmux" 2>/dev/null; do
         sleep 10
         elapsed=$((elapsed + 10))
         if [ "$elapsed" -ge "$max_wait" ]; then
             echo "TIMEOUT after ${max_wait}s. Killing test."
-            tmux kill-session -t "$_TEST_TMUX" 2>/dev/null
+            tmux kill-session -t "$test_tmux" 2>/dev/null
             break
         fi
     done
 
-    # ─── Verify results ─────────────────────────────────────────────────────
+    # ─── Step 4: Report state (no automatic cleanup of branches/artifacts) ──
     echo ""
     echo "==========================================="
-    echo "Verification"
-    echo "==========================================="
-
-    local pass=0
-    local fail=0
-
-    # Check 1: test artifact file exists
-    if [ -f "$_TEST_STATE_DIR/test-artifacts.md" ]; then
-        echo "PASS   test-artifacts.md created"
-        pass=$((pass + 1))
-    else
-        echo "FAIL   test-artifacts.md missing"
-        fail=$((fail + 1))
-    fi
-
-    # Check 2: test artifact has BOTH session markers (proves session branch accumulation)
-    if grep -q "Test session 1" "$_TEST_STATE_DIR/test-artifacts.md" 2>/dev/null; then
-        echo "PASS   T9998 session-1 marker present"
-        pass=$((pass + 1))
-    else
-        echo "FAIL   T9998 session-1 marker missing"
-        fail=$((fail + 1))
-    fi
-
-    if grep -q "Test session 2" "$_TEST_STATE_DIR/test-artifacts.md" 2>/dev/null; then
-        echo "PASS   T9999 session-2 marker present (branch accumulation worked)"
-        pass=$((pass + 1))
-    else
-        echo "FAIL   T9999 session-2 marker missing"
-        fail=$((fail + 1))
-    fi
-
-    # Check 3: both TODO entries marked COMPLETE
-    if grep -q 'T9998.*COMPLETE\|T9998.*\[x\]' "$_TEST_TODO" 2>/dev/null; then
-        echo "PASS   T9998 marked COMPLETE in TODO"
-        pass=$((pass + 1))
-    else
-        echo "FAIL   T9998 not marked COMPLETE"
-        fail=$((fail + 1))
-    fi
-
-    if grep -q 'T9999.*COMPLETE\|T9999.*\[x\]' "$_TEST_TODO" 2>/dev/null; then
-        echo "PASS   T9999 marked COMPLETE in TODO"
-        pass=$((pass + 1))
-    else
-        echo "FAIL   T9999 not marked COMPLETE"
-        fail=$((fail + 1))
-    fi
-
-    # Check 4: task branches exist
-    if git branch --list 'orchestra/t9998-*' | grep -q t9998; then
-        echo "PASS   T9998 task branch exists"
-        pass=$((pass + 1))
-    else
-        echo "WARN   T9998 task branch not found (may have been cleaned)"
-    fi
-
-    if git branch --list 'orchestra/t9999-*' | grep -q t9999; then
-        echo "PASS   T9999 task branch exists"
-        pass=$((pass + 1))
-    else
-        echo "WARN   T9999 task branch not found (may have been cleaned)"
-    fi
-
-    # Check 5: INBOX message was moved to Processed
-    if grep -A20 '## Processed' "$_TEST_STATE_DIR/INBOX.md" 2>/dev/null | grep -q "SMOKE TEST OVERRIDE"; then
-        echo "PASS   INBOX message moved to Processed"
-        pass=$((pass + 1))
-    else
-        echo "FAIL   INBOX message not moved to Processed"
-        fail=$((fail + 1))
-    fi
-
-    echo ""
-    echo "==========================================="
-    echo "Result: $pass passed, $fail failed"
+    echo "Test complete — inspect results"
     echo "==========================================="
     echo ""
 
-    if [ "$fail" -eq 0 ]; then
-        echo "Integration smoke test PASSED."
-    else
-        echo "Integration smoke test FAILED. Check logs:"
-        echo "  Session logs: $_TEST_STATE_DIR/sessions/"
-        echo "  Test state: $_TEST_STATE_DIR/"
+    local artifact_file="$project_dir/.orchestra/test-artifacts.md"
+    if [ -f "$artifact_file" ]; then
+        echo "test-artifacts.md:"
+        sed 's/^/   /' "$artifact_file"
         echo ""
-        echo "Leaving test fixtures in place for debugging — re-run to clean up."
-        # Disable cleanup on failure so user can inspect
-        trap - EXIT
+    else
+        echo "NOTE: test-artifacts.md not in main tree."
+        echo "      It lives on the session branch — check there."
+        echo ""
     fi
+
+    echo "Session branches (local):"
+    git -C "$project_dir" branch --list 'orchestra/session-*' | sed 's/^/   /' || echo "   (none)"
+    echo ""
+
+    echo "Task branches (local):"
+    git -C "$project_dir" branch --list 'orchestra/t999*' | sed 's/^/   /' || echo "   (none)"
+    echo ""
+
+    local latest_session_branch
+    latest_session_branch=$(git -C "$project_dir" branch --list 'orchestra/session-*' | tail -1 | tr -d ' *')
+    if [ -n "$latest_session_branch" ]; then
+        echo "Inspect the session branch (cumulative work + governance updates):"
+        echo "   git checkout $latest_session_branch"
+        echo ""
+    fi
+
+    echo "Clean up when satisfied:"
+    echo "   git reset --hard ${prep_commit}^        # revert test-prep commit on main"
+    echo "   git branch -D \$(git branch --list 'orchestra/t999*' 'orchestra/session-*' | tr -d ' *')"
+    echo "   git worktree prune"
+    echo "   rm -f $artifact_file"
 }
 
 # ─── Dispatch ─────────────────────────────────────────────────────────────────

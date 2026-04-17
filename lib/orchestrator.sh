@@ -541,11 +541,10 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
         git -C "$PROJECT_DIR" worktree remove --force "$WORKTREE_DIR" 2>/dev/null || rm -rf "$WORKTREE_DIR"
     fi
 
-    # Branch worktree from the fixtures branch (test mode) or origin/main (normal).
-    local base_branch="${ORCHESTRA_FIXTURES_BRANCH:-origin/main}"
-    if [ "$base_branch" = "origin/main" ]; then
-        git -C "$PROJECT_DIR" fetch origin main 2>/dev/null || true
-    fi
+    # Worktree branches from current HEAD of main (includes any recent commits
+    # like test-prep). Fetch first to ensure main is fresh.
+    git -C "$PROJECT_DIR" fetch origin main 2>/dev/null || true
+    local base_branch="${ORCHESTRA_BASE_BRANCH:-HEAD}"
     git -C "$PROJECT_DIR" worktree add "$WORKTREE_DIR" -b "$WORKTREE_BRANCH" "$base_branch" 2>/dev/null \
         || git -C "$PROJECT_DIR" worktree add "$WORKTREE_DIR" -b "$WORKTREE_BRANCH" main
     notify "   Worktree: $WORKTREE_DIR (branch: $WORKTREE_BRANCH)"
