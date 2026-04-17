@@ -449,6 +449,18 @@ stop_ram_monitor() {
     fi
 }
 
+# Read the TODO file from the latest session branch (if available) so we can
+# check task completion without relying on the main working tree being synced.
+# Falls back to the main-tree TODO_FILE if no session branch exists yet.
+read_todo_from_session() {
+    local todo_rel="${TODO_FILE#$PROJECT_DIR/}"
+    if [ -n "${PREV_SESSION_BRANCH:-}" ] && git -C "$PROJECT_DIR" rev-parse --verify "$PREV_SESSION_BRANCH" >/dev/null 2>&1; then
+        git -C "$PROJECT_DIR" show "$PREV_SESSION_BRANCH:$todo_rel" 2>/dev/null
+    else
+        cat "$TODO_FILE" 2>/dev/null
+    fi
+}
+
 sync_governance_from_worktree() {
     # Copy governance files and session workspaces from worktree back to main tree.
     # Governance: so the orchestrator can check task completion status.
@@ -486,7 +498,7 @@ cleanup_worktree() {
     if [ -n "${WORKTREE_DIR:-}" ] && [ -d "${WORKTREE_DIR:-}" ]; then
         cd "$PROJECT_DIR"
         # Sync governance changes back to main tree before cleanup
-        sync_governance_from_worktree
+        # sync_governance_from_worktree  # disabled — branch-off-a-branch makes git the sync mechanism
         # Push any branches the session created
         local branches
         branches=$(git -C "$WORKTREE_DIR" branch --list 'orchestra/*' 2>/dev/null | tr -d ' *' || true)
@@ -558,12 +570,20 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
         git -C "$PROJECT_DIR" worktree remove --force "$WORKTREE_DIR" 2>/dev/null || rm -rf "$WORKTREE_DIR"
     fi
 
-    # Worktree branches from current HEAD of main (includes any recent commits
-    # like test-prep). Fetch first to ensure main is fresh.
+    # Worktree branches from previous session branch (if any) so it inherits
+    # all completed work. First session branches from main.
     git -C "$PROJECT_DIR" fetch origin main 2>/dev/null || true
-    BASE_BRANCH="${ORCHESTRA_BASE_BRANCH:-HEAD}"
+    if [ -n "${PREV_SESSION_BRANCH:-}" ] && git -C "$PROJECT_DIR" rev-parse --verify "$PREV_SESSION_BRANCH" >/dev/null 2>&1; then
+        BASE_BRANCH="$PREV_SESSION_BRANCH"
+        notify "   Branching from previous session: $PREV_SESSION_BRANCH"
+    else
+        BASE_BRANCH="${ORCHESTRA_BASE_BRANCH:-HEAD}"
+    fi
     git -C "$PROJECT_DIR" worktree add "$WORKTREE_DIR" -b "$WORKTREE_BRANCH" "$BASE_BRANCH" 2>/dev/null \
         || git -C "$PROJECT_DIR" worktree add "$WORKTREE_DIR" -b "$WORKTREE_BRANCH" main
+
+    # Track this branch so the next session can inherit from it
+    PREV_SESSION_BRANCH="$WORKTREE_BRANCH"
     notify "   Worktree: $WORKTREE_DIR (branch: $WORKTREE_BRANCH)"
 
     # Snapshot state files before the session runs (from worktree)
@@ -635,7 +655,7 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
         notify "Session $SESSION_COUNT crashed (exit $EXIT_CODE). Consecutive: $CONSECUTIVE_CRASHES/$MAX_CONSECUTIVE_CRASHES"
 
         # Sync governance from worktree before checking state
-        sync_governance_from_worktree
+        # sync_governance_from_worktree  # disabled — branch-off-a-branch makes git the sync mechanism
 
         if state_files_changed "$PRE_STATE"; then
             # v2 INVERSION: v1 treated governance-changed as safe (USE_RECOVERY_PROMPT=false).
@@ -671,7 +691,7 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
     fi
 
     # ─── Sync governance from worktree and clean up ─────────────────────────
-    sync_governance_from_worktree
+    # sync_governance_from_worktree  # disabled — branch-off-a-branch makes git the sync mechanism
     cd "$PROJECT_DIR"
 
     # ─── Session exited cleanly (exit code 0) ─────────────────────────────────
@@ -708,7 +728,7 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
         IFS=',' read -ra TASK_LIST <<< "$TASKS"
         for tn in "${TASK_LIST[@]}"; do
             tn=$(echo "$tn" | xargs)
-            if grep -A5 "### $tn" "$TODO_FILE" 2>/dev/null | grep -q 'Status:.*COMPLETE'; then
+            if read_todo_from_session | grep -A5 "### $tn" 2>/dev/null | grep -q 'Status:.*COMPLETE'; then
                 : # done
             else
                 REMAINING=$((REMAINING + 1))
