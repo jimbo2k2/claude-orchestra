@@ -45,9 +45,9 @@ Runs once before session exit.
 
 | # | Step | Gate (skip if...) |
 |---|------|-------------------|
-| W1 | **Update learnings** | No new learnings -> skip. |
-| W2 | **Propagate to Product docs** | No findings affecting docs -> skip. |
+| W1 | **Update learnings** | No new learnings -> skip. Update project learnings files. |
+| W2 | **Propagate to domain docs** | No work touched a domain/module -> skip. New features MUST update the owning module's docs. |
 | W3 | **Review learnings for CLAUDE.md promotion** | No candidates -> skip. |
 | W4 | **Governance archival** | No file crossed threshold -> skip. |
 | W5 | **Write HANDOVER** | Not Orchestra, or last session -> skip. |
-| W6 | **Final commit & push** | Nothing to commit -> skip. |
+| W6 | **INBOX cleanup & final commit** | Nothing to commit AND no processed INBOX entries -> skip. Clear INBOX.md Processed section. Commit + push. |
