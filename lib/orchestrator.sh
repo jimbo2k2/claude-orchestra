@@ -320,13 +320,13 @@ Your assigned T-numbers are in the TASKS field of .orchestra/config. For each ta
    **Branching model (IMPORTANT):** Your worktree started on a session branch
    (look at `git branch --show-current` — it will be `orchestra/session-NNN-*`).
    For each task:
-   a. `git checkout <session-branch>` — return to the session branch
+   a. `git checkout __SESSION_BRANCH__` — return to the session branch
    b. `git checkout -b orchestra/<t-number>-<slug>` — create task branch from
       current session state (which includes all previously completed tasks)
    c. Do the task work, commit, push the task branch
    d. After step 19 commit & push, merge the task branch back into the session
       branch so the next task sees the cumulative state:
-         git checkout <session-branch>
+         git checkout __SESSION_BRANCH__
          git merge orchestra/<t-number>-<slug>
       (This will be a fast-forward merge since the task branch was the only
       thing modifying the session branch.)
@@ -449,65 +449,27 @@ stop_ram_monitor() {
     fi
 }
 
-# Read the TODO file from the latest session branch (if available) so we can
-# check task completion without relying on the main working tree being synced.
-# Falls back to the main-tree TODO_FILE if no session branch exists yet.
+# Read the TODO file from the session branch (which has all completed work
+# accumulated). The main working tree may be stale.
 read_todo_from_session() {
     local todo_rel="${TODO_FILE#$PROJECT_DIR/}"
-    if [ -n "${PREV_SESSION_BRANCH:-}" ] && git -C "$PROJECT_DIR" rev-parse --verify "$PREV_SESSION_BRANCH" >/dev/null 2>&1; then
-        git -C "$PROJECT_DIR" show "$PREV_SESSION_BRANCH:$todo_rel" 2>/dev/null
+    if [ -n "${SESSION_BRANCH:-}" ] && git rev-parse --verify "$SESSION_BRANCH" >/dev/null 2>&1; then
+        git show "$SESSION_BRANCH:$todo_rel" 2>/dev/null
     else
         cat "$TODO_FILE" 2>/dev/null
-    fi
-}
-
-sync_governance_from_worktree() {
-    # Copy governance files and session workspaces from worktree back to main tree.
-    # Governance: so the orchestrator can check task completion status.
-    # Session workspaces: preserved for audit trail of Orchestra's tactical decomposition.
-    if [ -n "${WORKTREE_DIR:-}" ] && [ -d "${WORKTREE_DIR:-}" ]; then
-        for gov_file in "$TODO_FILE" "$DECISIONS_FILE" "$CHANGELOG_FILE"; do
-            local relative="${gov_file#$PROJECT_DIR/}"
-            local worktree_copy="$WORKTREE_DIR/$relative"
-            if [ -f "$worktree_copy" ]; then
-                cp "$worktree_copy" "$gov_file"
-            fi
-        done
-        # Also sync HANDOVER and INBOX
-        for op_file in HANDOVER.md INBOX.md; do
-            if [ -f "$WORKTREE_DIR/.orchestra/$op_file" ]; then
-                cp "$WORKTREE_DIR/.orchestra/$op_file" "$STATE_DIR/$op_file"
-            fi
-        done
-        # Sync task workspaces (.orchestra/sessions/<T-number>/) for audit trail.
-        # Each T-number subdirectory contains tasks.md + log.md from the session's
-        # tactical decomposition. Untracked in the worktree, so copy them over.
-        if [ -d "$WORKTREE_DIR/.orchestra/sessions" ]; then
-            for task_dir in "$WORKTREE_DIR/.orchestra/sessions"/T*/; do
-                [ -d "$task_dir" ] || continue
-                local task_name
-                task_name=$(basename "$task_dir")
-                mkdir -p "$STATE_DIR/sessions/$task_name"
-                cp -r "$task_dir"* "$STATE_DIR/sessions/$task_name/" 2>/dev/null || true
-            done
-        fi
     fi
 }
 
 cleanup_worktree() {
     if [ -n "${WORKTREE_DIR:-}" ] && [ -d "${WORKTREE_DIR:-}" ]; then
         cd "$PROJECT_DIR"
-        # Sync governance changes back to main tree before cleanup
-        # sync_governance_from_worktree  # disabled — branch-off-a-branch makes git the sync mechanism
-        # Push any branches the session created
-        local branches
-        branches=$(git -C "$WORKTREE_DIR" branch --list 'orchestra/*' 2>/dev/null | tr -d ' *' || true)
-        for branch in $branches; do
-            git push origin "$branch" 2>/dev/null && notify "   Pushed branch: $branch" || true
+        # Push the session branch (it has all completed task work merged in)
+        git push origin "$SESSION_BRANCH" 2>/dev/null && notify "   Pushed session branch: $SESSION_BRANCH" || true
+        # Push any task branches Claude created (already merged into session branch)
+        for branch in $(git -C "$WORKTREE_DIR" branch --list 'orchestra/t*' 2>/dev/null | tr -d ' *' || true); do
+            git push origin "$branch" 2>/dev/null && notify "   Pushed task branch: $branch" || true
         done
         git worktree remove --force "$WORKTREE_DIR" 2>/dev/null || rm -rf "$WORKTREE_DIR"
-        # Clean up the session branch (the worktree's own branch, not task branches)
-        git branch -D "${WORKTREE_BRANCH:-}" 2>/dev/null || true
         notify "   Worktree cleaned up: $WORKTREE_DIR"
     fi
 }
@@ -530,6 +492,14 @@ notify "   Max sessions: $MAX_SESSIONS | Max consecutive crashes: $MAX_CONSECUTI
 if [ "$QUOTA_PACING" = "true" ]; then
     notify "   Quota pacing: ON (threshold: ${QUOTA_THRESHOLD}%)"
 fi
+
+# ─── Session branch (one per orchestra run, used by all sessions) ────────────
+# Created once here, reused across all sessions. Each session worktree checks
+# out THIS branch. Task branches branch from it and merge back into it.
+git fetch origin main 2>/dev/null || true
+SESSION_BRANCH="orchestra/run-$(date -u +%Y%m%d-%H%M%S)"
+git branch "$SESSION_BRANCH" origin/main 2>/dev/null || git branch "$SESSION_BRANCH" main
+notify "   Session branch: $SESSION_BRANCH"
 
 while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
     # ─── Quota pacing: check before spawning ─────────────────────────────
@@ -558,33 +528,21 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
     fi
     CURRENT_PROMPT="${CURRENT_PROMPT//__STATE_DIR__/$STATE_DIR_REL}"
     CURRENT_PROMPT="${CURRENT_PROMPT//__ORCH_CONFIG__/$CONFIG_PATH_REL}"
+    CURRENT_PROMPT="${CURRENT_PROMPT//__SESSION_BRANCH__/$SESSION_BRANCH}"
 
     # ─── Worktree setup ─────────────────────────────────────────────────────
-    # Create a fresh worktree so the main working tree stays on main.
-    # The session creates task branches within the worktree.
+    # All sessions in this orchestra run check out the SAME session branch.
+    # Task branches are created from it and merged back into it after each task.
     WORKTREE_DIR="${WORKTREE_BASE:-/tmp/orchestra-$(basename "$PROJECT_DIR")}/session-$(printf '%03d' $SESSION_COUNT)"
-    WORKTREE_BRANCH="orchestra/session-$(printf '%03d' $SESSION_COUNT)-$SESSION_TIMESTAMP"
 
     # Clean up any stale worktree at this path
     if [ -d "$WORKTREE_DIR" ]; then
-        git -C "$PROJECT_DIR" worktree remove --force "$WORKTREE_DIR" 2>/dev/null || rm -rf "$WORKTREE_DIR"
+        git worktree remove --force "$WORKTREE_DIR" 2>/dev/null || rm -rf "$WORKTREE_DIR"
     fi
 
-    # Worktree branches from previous session branch (if any) so it inherits
-    # all completed work. First session branches from main.
-    git -C "$PROJECT_DIR" fetch origin main 2>/dev/null || true
-    if [ -n "${PREV_SESSION_BRANCH:-}" ] && git -C "$PROJECT_DIR" rev-parse --verify "$PREV_SESSION_BRANCH" >/dev/null 2>&1; then
-        BASE_BRANCH="$PREV_SESSION_BRANCH"
-        notify "   Branching from previous session: $PREV_SESSION_BRANCH"
-    else
-        BASE_BRANCH="${ORCHESTRA_BASE_BRANCH:-HEAD}"
-    fi
-    git -C "$PROJECT_DIR" worktree add "$WORKTREE_DIR" -b "$WORKTREE_BRANCH" "$BASE_BRANCH" 2>/dev/null \
-        || git -C "$PROJECT_DIR" worktree add "$WORKTREE_DIR" -b "$WORKTREE_BRANCH" main
-
-    # Track this branch so the next session can inherit from it
-    PREV_SESSION_BRANCH="$WORKTREE_BRANCH"
-    notify "   Worktree: $WORKTREE_DIR (branch: $WORKTREE_BRANCH)"
+    git worktree add "$WORKTREE_DIR" "$SESSION_BRANCH" \
+        || die "Could not create worktree at $WORKTREE_DIR"
+    notify "   Worktree: $WORKTREE_DIR (branch: $SESSION_BRANCH)"
 
     # Snapshot state files before the session runs (from worktree)
     cd "$WORKTREE_DIR"
@@ -655,7 +613,6 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
         notify "Session $SESSION_COUNT crashed (exit $EXIT_CODE). Consecutive: $CONSECUTIVE_CRASHES/$MAX_CONSECUTIVE_CRASHES"
 
         # Sync governance from worktree before checking state
-        # sync_governance_from_worktree  # disabled — branch-off-a-branch makes git the sync mechanism
 
         if state_files_changed "$PRE_STATE"; then
             # v2 INVERSION: v1 treated governance-changed as safe (USE_RECOVERY_PROMPT=false).
@@ -691,7 +648,6 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
     fi
 
     # ─── Sync governance from worktree and clean up ─────────────────────────
-    # sync_governance_from_worktree  # disabled — branch-off-a-branch makes git the sync mechanism
     cd "$PROJECT_DIR"
 
     # ─── Session exited cleanly (exit code 0) ─────────────────────────────────

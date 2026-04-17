@@ -523,10 +523,16 @@ cmd_test() {
         echo ""
     fi
 
-    echo "Test fixtures will reset automatically on the next 'orchestra test' run."
-    echo "To remove test branches/worktrees:"
-    echo "   git branch -D \$(git branch --list 'orchestra/t999*' 'orchestra/session-*' | tr -d ' *')"
-    echo "   git worktree prune"
+    # ─── Auto cleanup of test artifacts ─────────────────────────────────────
+    echo "Cleaning up test artifacts..."
+    git -C "$project_dir" worktree prune 2>/dev/null
+    for branch in $(git -C "$project_dir" branch --list 'orchestra/run-*' 'orchestra/t9998-*' 'orchestra/t9999-*' 2>/dev/null | tr -d ' *'); do
+        git -C "$project_dir" branch -D "$branch" 2>/dev/null && echo "   Deleted $branch" || true
+    done
+    # Reset .orchestra/test/ to its committed state (in case anything leaked into main tree)
+    git -C "$project_dir" checkout -- .orchestra/test/ 2>/dev/null
+    rm -f "$project_dir/.orchestra/test/test-artifacts.md" 2>/dev/null
+    echo "Done. .orchestra/test/ reset to committed state."
 }
 
 # ─── Dispatch ─────────────────────────────────────────────────────────────────
