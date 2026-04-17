@@ -36,15 +36,17 @@ if ! git rev-parse --show-toplevel &>/dev/null; then
 fi
 
 PROJECT_DIR="$(git rev-parse --show-toplevel)"
-STATE_DIR="${STATE_DIR:-${PROJECT_DIR}/.orchestra}"
-LOG_DIR="${STATE_DIR}/sessions"
 
 cd "$PROJECT_DIR"
-mkdir -p "$LOG_DIR"
 
-# ─── Load config ────────────────────────────────────────────────────────────
+# ─── Load config (sets STATE_DIR if config provides it) ──────────────────────
 source "$PROJECT_DIR/.orchestra/lib/config.sh"
 load_orchestra_config "$PROJECT_DIR" || exit 1
+
+# Default STATE_DIR after config load (config may have overridden it)
+STATE_DIR="${STATE_DIR:-${PROJECT_DIR}/.orchestra}"
+LOG_DIR="${STATE_DIR}/sessions"
+mkdir -p "$LOG_DIR"
 
 # ─── Pre-flight checks ─────────────────────────────────────────────────────
 if ! command -v claude &>/dev/null; then
@@ -283,12 +285,16 @@ branch. Your main working tree is untouched. Create task branches with
 `git checkout -b orchestra/<t-number>-<slug>` as normal. Push branches when done.
 The orchestrator cleans up the worktree after your session exits.
 
-1. Read .orchestra/config — this contains your assigned T-numbers (TASKS field),
-   governance file paths, and the protocol reference.
+1. Read .orchestra/config — **the TASKS field is the AUTHORITATIVE list of
+   T-numbers you must work on this session. Nothing else overrides this.**
+   The config also contains governance file paths and the protocol reference.
 2. Read DEVELOPMENT-PROTOCOL.md — this is your authoritative task sequence.
    Follow it in auto-proceed mode (all gates auto-accept).
 3. Read .orchestra/CLAUDE.md — session-specific rules for autonomous mode.
-4. Read .orchestra/HANDOVER.md — context from the previous session.
+4. Read .orchestra/HANDOVER.md — **historical context only**. This describes
+   what happened in PREVIOUS sessions. Do NOT confuse it with your current
+   assignment. If HANDOVER says tasks were completed, those are done — your
+   job is the NEW tasks listed in config TASKS, not re-verifying old ones.
 5. Read .orchestra/INBOX.md — check for human messages. Process any unread
    messages before starting task work. After processing each message, MOVE it
    from the Messages section to the Processed section and add a brief response
@@ -296,6 +302,8 @@ The orchestrator cleans up the worktree after your session exits.
    If a message contradicts your assigned tasks, write a HANDOVER note and
    exit BLOCKED.
 6. Read the governance files (TODO, DECISIONS, CHANGELOG) at the paths in config.
+   **Use these to find the DETAIL for each T-number in your TASKS list. Do not
+   pick tasks from these files — your task list comes from config.**
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 TASK EXECUTION
@@ -544,8 +552,8 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
     # Worktree branches from current HEAD of main (includes any recent commits
     # like test-prep). Fetch first to ensure main is fresh.
     git -C "$PROJECT_DIR" fetch origin main 2>/dev/null || true
-    local base_branch="${ORCHESTRA_BASE_BRANCH:-HEAD}"
-    git -C "$PROJECT_DIR" worktree add "$WORKTREE_DIR" -b "$WORKTREE_BRANCH" "$base_branch" 2>/dev/null \
+    BASE_BRANCH="${ORCHESTRA_BASE_BRANCH:-HEAD}"
+    git -C "$PROJECT_DIR" worktree add "$WORKTREE_DIR" -b "$WORKTREE_BRANCH" "$BASE_BRANCH" 2>/dev/null \
         || git -C "$PROJECT_DIR" worktree add "$WORKTREE_DIR" -b "$WORKTREE_BRANCH" main
     notify "   Worktree: $WORKTREE_DIR (branch: $WORKTREE_BRANCH)"
 

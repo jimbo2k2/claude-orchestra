@@ -25,6 +25,10 @@ load_orchestra_config() {
     CHANGELOG_FILE="${project_dir}/${CHANGELOG_FILE}"
     TOOLCHAIN_FILE="${project_dir}/${TOOLCHAIN_FILE:-.orchestra/toolchain.md}"
     DEVELOPMENT_PROTOCOL="${project_dir}/${DEVELOPMENT_PROTOCOL:-DEVELOPMENT-PROTOCOL.md}"
+    # If config sets STATE_DIR (e.g. test mode), resolve it as absolute path
+    if [ -n "${STATE_DIR:-}" ] && [ "${STATE_DIR:0:1}" != "/" ]; then
+        STATE_DIR="${project_dir}/${STATE_DIR}"
+    fi
 }
 
 # Pre-flight validation: check all required config fields and files exist

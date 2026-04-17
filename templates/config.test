@@ -1,10 +1,11 @@
 # .orchestra/config.test — Orchestra integration test configuration
-# Invoked by `orchestra test`. Committed to the repo so worktrees inherit it.
 #
-# Test tasks T9998 + T9999 are added to the real TODO.md at test invocation
-# time (as a throwaway commit on the current branch), so the worktree sees
-# them. After the test, the user can inspect the session branch and revert
-# the test-prep commit from main when satisfied.
+# Invoked by `orchestra test`. Self-contained: all governance files for the
+# test live under .orchestra/test/. The real TODO.md / DECISIONS.md /
+# CHANGELOG.md / HANDOVER.md / INBOX.md are NOT touched.
+#
+# Test fixtures are committed to the repo so worktrees inherit them.
+# Before each test run, .orchestra/test/ is reset to a known-clean state.
 
 # ─── Task Queue ──────────────────────────────────────────────────────────────
 TASKS=T9998,T9999
@@ -14,8 +15,7 @@ MAX_SESSIONS=3
 MAX_CONSECUTIVE_CRASHES=2
 
 # ─── Quota Pacing ────────────────────────────────────────────────────────────
-# Disabled for test — we want a fast run
-QUOTA_PACING=false
+QUOTA_PACING=true
 QUOTA_THRESHOLD=80
 QUOTA_POLL_INTERVAL=120
 
@@ -27,11 +27,11 @@ CRASH_COOLDOWN_SECONDS=3
 MODEL=opus
 EFFORT=high
 
-# ─── Governance Paths ────────────────────────────────────────────────────────
-# Same as production config — test tasks live in the real TODO.md
-TODO_FILE=TODO/TODO.md
-DECISIONS_FILE=Decisions/DECISIONS.md
-CHANGELOG_FILE=Changelog/CHANGELOG.md
+# ─── Test Governance Paths ───────────────────────────────────────────────────
+# Self-contained under .orchestra/test/ — does not touch real governance files
+TODO_FILE=.orchestra/test/TODO/TODO.md
+DECISIONS_FILE=.orchestra/test/Decisions/DECISIONS.md
+CHANGELOG_FILE=.orchestra/test/Changelog/CHANGELOG.md
 
 # ─── Protocol ────────────────────────────────────────────────────────────────
 DEVELOPMENT_PROTOCOL=DEVELOPMENT-PROTOCOL.md
@@ -44,3 +44,9 @@ WORKTREE_BASE=/tmp/orchestra-test
 
 # ─── Tmux ────────────────────────────────────────────────────────────────────
 TMUX_SESSION=orchestra-test
+
+# ─── State Dir Override ──────────────────────────────────────────────────────
+# The orchestrator reads HANDOVER.md and INBOX.md from STATE_DIR (default
+# .orchestra/). For test mode, point it at .orchestra/test/ so we use the
+# test versions, not the live ones.
+STATE_DIR=.orchestra/test

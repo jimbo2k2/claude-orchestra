@@ -411,19 +411,22 @@ cmd_status() {
 # ─── test ────────────────────────────────────────────────────────────────────
 # Integration test — exercises the orchestrator loop end-to-end.
 #
+# ─── test ────────────────────────────────────────────────────────────────────
+# Integration test using self-contained .orchestra/test/ governance files.
+# No pollution of real TODO.md / DECISIONS.md / CHANGELOG.md.
+#
 # How it works:
-#   1. Reads config from .orchestra/config.test (not .orchestra/config)
-#   2. Adds synthetic T9998 + T9999 entries to the real TODO.md on current branch
-#      (as a throwaway commit — you can revert it after inspecting results)
-#   3. Runs the orchestrator normally — same code path as `orchestra run`
-#   4. Injects a forced-handover INBOX message so session 1 hands over after T9998
-#      and session 2 picks up T9999, proving the session boundary + branch
-#      accumulation flow
-#   5. The resulting session branch is pushed to remote for your inspection
+#   1. Resets .orchestra/test/ to clean state (T9998 + T9999 OPEN, no artifacts)
+#   2. Commits the reset state so the worktree branches from it
+#   3. Runs orchestrator with .orchestra/config.test (which points STATE_DIR
+#      and governance paths at .orchestra/test/)
+#   4. INBOX message in test/INBOX.md forces handover after T9998
+#   5. Session 2 picks up T9999, completes
+#   6. Session branch preserved locally + on remote for inspection
 #
 # After the test:
-#   - Inspect the session branch (pushed to remote) — you can clone/test/merge it
-#   - Revert the test-prep commit from main when satisfied (instructions printed)
+#   - Inspect the session branch (cumulative work)
+#   - Re-running test resets .orchestra/test/ automatically
 
 cmd_test() {
     local project_dir
@@ -432,79 +435,31 @@ cmd_test() {
     [ -d "$project_dir/.orchestra" ] || die ".orchestra/ not found."
     [ -f "$project_dir/.orchestra/config.test" ] || \
         die ".orchestra/config.test not found. It should be committed to the repo."
+    [ -d "$project_dir/.orchestra/test" ] || \
+        die ".orchestra/test/ not found. It should be committed to the repo."
 
     echo "==========================================="
     echo "Orchestra integration test"
     echo "==========================================="
-    echo ""
-    echo "Approach:"
-    echo "  1. Adds T9998 + T9999 to TODO.md on current branch (throwaway commit)"
-    echo "  2. Runs orchestra with .orchestra/config.test"
-    echo "  3. Session 1 completes T9998, hands over (forced via INBOX)"
-    echo "  4. Session 2 completes T9999"
-    echo "  5. Session branches preserved locally + pushed to remote for inspection"
     echo ""
 
     local test_tmux="orchestra-test"
     tmux has-session -t "$test_tmux" 2>/dev/null && \
         die "tmux session '$test_tmux' already exists. Kill it first: tmux kill-session -t $test_tmux"
 
-    # ─── Step 1: Add test tasks to TODO.md ──────────────────────────────────
-    local test_timestamp
-    test_timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    echo "Adding T9998 + T9999 to TODO.md..."
+    # ─── Reset .orchestra/test/ to clean state ──────────────────────────────
+    # Restore committed versions (discards any in-progress test state)
+    echo "Resetting .orchestra/test/ to committed state..."
+    git -C "$project_dir" checkout -- .orchestra/test/ 2>/dev/null || true
+    rm -f "$project_dir/.orchestra/test/test-artifacts.md" 2>/dev/null
+    rm -rf "$project_dir/.orchestra/test/sessions" 2>/dev/null
 
-    cat >> "$project_dir/TODO/TODO.md" <<TODOEOF
+    # Stage and commit if anything changed (rare — only if test files were dirty)
+    if ! git -C "$project_dir" diff --quiet .orchestra/test/ 2>/dev/null; then
+        git -C "$project_dir" add .orchestra/test/
+        git -C "$project_dir" commit -m "test: reset orchestra test fixtures" --no-verify 2>/dev/null
+    fi
 
-### T9998 — Orchestra integration test task 1
-
-- **Module:** Test (disposable)
-- **Status:** \`[ ]\` OPEN
-- **Added:** $test_timestamp
-- **Detail:** Append the line \`# Test session 1: $test_timestamp\` to \`.orchestra/test-artifacts.md\` (create if missing). This verifies session 1 executes and commits. Mark COMPLETE in TODO.md, write a C-entry in CHANGELOG.md.
-- **AC:**
-  - [ ] File \`.orchestra/test-artifacts.md\` contains the session 1 marker line
-
-### T9999 — Orchestra integration test task 2
-
-- **Module:** Test (disposable)
-- **Status:** \`[ ]\` OPEN
-- **Added:** $test_timestamp
-- **Detail:** Append the line \`# Test session 2: $test_timestamp\` to \`.orchestra/test-artifacts.md\`. The file should already exist from T9998 — if it doesn't, the session-branch accumulation failed; flag BLOCKED.
-- **AC:**
-  - [ ] File \`.orchestra/test-artifacts.md\` contains BOTH session markers
-TODOEOF
-
-    git -C "$project_dir" add TODO/TODO.md
-    git -C "$project_dir" commit -m "test: add T9998 + T9999 for orchestra integration test (throwaway)" --no-verify 2>/dev/null || \
-        die "Could not commit test tasks to TODO.md"
-
-    local prep_commit
-    prep_commit=$(git -C "$project_dir" rev-parse HEAD)
-    echo "Test-prep commit: $prep_commit"
-
-    # ─── Step 2: Inject forced-handover INBOX message ───────────────────────
-    echo "Injecting forced-handover INBOX message..."
-    local tmp_inbox
-    tmp_inbox=$(mktemp)
-    awk '
-        /^## Processed/ && !done {
-            print "**ORCHESTRA TEST — forced handover.** This is an integration test. After completing T9998 (the first test task), you MUST write HANDOVER and exit — do not start T9999. This forces a session boundary to verify session 2 picks up T9999 from the accumulated session branch. Move this message to Processed before exiting."
-            print ""
-            done=1
-        }
-        { print }
-        END {
-            if (!done) {
-                print ""
-                print "## Processed"
-                print "**ORCHESTRA TEST — forced handover.** (added by orchestra test — see above)"
-            }
-        }
-    ' "$project_dir/.orchestra/INBOX.md" > "$tmp_inbox"
-    mv "$tmp_inbox" "$project_dir/.orchestra/INBOX.md"
-
-    # ─── Step 3: Run the orchestrator with the test config ──────────────────
     echo ""
     echo "Starting orchestrator with .orchestra/config.test..."
     echo "Watch: tmux attach -t $test_tmux"
@@ -530,23 +485,27 @@ TODOEOF
         fi
     done
 
-    # ─── Step 4: Report state (no automatic cleanup of branches/artifacts) ──
+    # ─── Report state ───────────────────────────────────────────────────────
     echo ""
     echo "==========================================="
     echo "Test complete — inspect results"
     echo "==========================================="
     echo ""
 
-    local artifact_file="$project_dir/.orchestra/test-artifacts.md"
+    local artifact_file="$project_dir/.orchestra/test/test-artifacts.md"
     if [ -f "$artifact_file" ]; then
         echo "test-artifacts.md:"
         sed 's/^/   /' "$artifact_file"
         echo ""
     else
-        echo "NOTE: test-artifacts.md not in main tree."
+        echo "NOTE: .orchestra/test/test-artifacts.md not in main tree."
         echo "      It lives on the session branch — check there."
         echo ""
     fi
+
+    echo "TODO.md status (in main tree):"
+    grep -A1 '### T999' "$project_dir/.orchestra/test/TODO/TODO.md" | grep -E "###|Status:" | sed 's/^/   /' || echo "   (could not read)"
+    echo ""
 
     echo "Session branches (local):"
     git -C "$project_dir" branch --list 'orchestra/session-*' | sed 's/^/   /' || echo "   (none)"
@@ -564,11 +523,10 @@ TODOEOF
         echo ""
     fi
 
-    echo "Clean up when satisfied:"
-    echo "   git reset --hard ${prep_commit}^        # revert test-prep commit on main"
+    echo "Test fixtures will reset automatically on the next 'orchestra test' run."
+    echo "To remove test branches/worktrees:"
     echo "   git branch -D \$(git branch --list 'orchestra/t999*' 'orchestra/session-*' | tr -d ' *')"
     echo "   git worktree prune"
-    echo "   rm -f $artifact_file"
 }
 
 # ─── Dispatch ─────────────────────────────────────────────────────────────────
