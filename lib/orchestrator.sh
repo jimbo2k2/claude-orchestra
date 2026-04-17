@@ -285,17 +285,17 @@ branch. Your main working tree is untouched. Create task branches with
 `git checkout -b orchestra/<t-number>-<slug>` as normal. Push branches when done.
 The orchestrator cleans up the worktree after your session exits.
 
-1. Read .orchestra/config — **the TASKS field is the AUTHORITATIVE list of
+1. Read __ORCH_CONFIG__ — **the TASKS field is the AUTHORITATIVE list of
    T-numbers you must work on this session. Nothing else overrides this.**
    The config also contains governance file paths and the protocol reference.
 2. Read DEVELOPMENT-PROTOCOL.md — this is your authoritative task sequence.
    Follow it in auto-proceed mode (all gates auto-accept).
 3. Read .orchestra/CLAUDE.md — session-specific rules for autonomous mode.
-4. Read .orchestra/HANDOVER.md — **historical context only**. This describes
+4. Read __STATE_DIR__/HANDOVER.md — **historical context only**. This describes
    what happened in PREVIOUS sessions. Do NOT confuse it with your current
    assignment. If HANDOVER says tasks were completed, those are done — your
    job is the NEW tasks listed in config TASKS, not re-verifying old ones.
-5. Read .orchestra/INBOX.md — check for human messages. Process any unread
+5. Read __STATE_DIR__/INBOX.md — check for human messages. Process any unread
    messages before starting task work. After processing each message, MOVE it
    from the Messages section to the Processed section and add a brief response
    note. Do not leave processed messages in the Messages section.
@@ -343,7 +343,7 @@ Your assigned T-numbers are in the TASKS field of .orchestra/config. For each ta
    BLOCKED in TODO.md with a reason and move to the next task.
 
 4. Between tasks (protocol step 20):
-   a. Re-read .orchestra/INBOX.md for new human messages.
+   a. Re-read __STATE_DIR__/INBOX.md for new human messages.
    b. Evaluate remaining context. If you have completed 3 or more tasks in
       this session, prefer a clean HANDOVER over risking context exhaustion.
    c. If continuing, return to step 1 for next task.
@@ -537,6 +537,15 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
         CURRENT_PROMPT="$SESSION_PROMPT"
         notify "Starting session $SESSION_COUNT/$MAX_SESSIONS"
     fi
+
+    # Substitute placeholders with concrete paths (relative to project root)
+    STATE_DIR_REL="${STATE_DIR#$PROJECT_DIR/}"
+    CONFIG_PATH_REL="${ORCHESTRA_CONFIG:-.orchestra/config}"
+    if [ "${CONFIG_PATH_REL:0:1}" = "/" ]; then
+        CONFIG_PATH_REL="${CONFIG_PATH_REL#$PROJECT_DIR/}"
+    fi
+    CURRENT_PROMPT="${CURRENT_PROMPT//__STATE_DIR__/$STATE_DIR_REL}"
+    CURRENT_PROMPT="${CURRENT_PROMPT//__ORCH_CONFIG__/$CONFIG_PATH_REL}"
 
     # ─── Worktree setup ─────────────────────────────────────────────────────
     # Create a fresh worktree so the main working tree stays on main.
