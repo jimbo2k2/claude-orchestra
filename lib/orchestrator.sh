@@ -225,14 +225,17 @@ extract_session_quota() {
 # managed to update them before dying.
 
 snapshot_state_files() {
-    STATE_SNAPSHOT=""
-    # Checksum governance files + HANDOVER (HANDOVER included for stall detection)
-    for f in "$TODO_FILE" "$DECISIONS_FILE" "$CHANGELOG_FILE" "$STATE_DIR/HANDOVER.md"; do
-        if [ -f "$f" ]; then
-            STATE_SNAPSHOT="$STATE_SNAPSHOT$(md5sum "$f")"
-        fi
-    done
-    echo "$STATE_SNAPSHOT"
+    # State = session branch HEAD. If the branch advances, state changed.
+    # Falls back to main-tree file checksums if no session branch yet.
+    if [ -n "${SESSION_BRANCH:-}" ] && git rev-parse --verify "$SESSION_BRANCH" >/dev/null 2>&1; then
+        git rev-parse "$SESSION_BRANCH"
+    else
+        local snap=""
+        for f in "$TODO_FILE" "$DECISIONS_FILE" "$CHANGELOG_FILE" "$STATE_DIR/HANDOVER.md"; do
+            [ -f "$f" ] && snap="$snap$(md5sum "$f")"
+        done
+        echo "$snap"
+    fi
 }
 
 state_files_changed() {
@@ -354,8 +357,12 @@ SESSION WRAP-UP
 
 Before exiting, follow DEVELOPMENT-PROTOCOL.md Part 2 (steps W1-W6).
 
-Then write .orchestra/COMMIT_MSG with a single-line commit message (max 68 chars,
-reference T-numbers). The orchestrator uses this for the session commit.
+**Important — wrap-up runs on the session branch directly.** After your last
+task's merge-back, you're on the session branch. Wrap-up changes (learnings
+updates, Product doc propagation, governance archival, HANDOVER, INBOX cleanup)
+all commit directly to the session branch — no task branch is needed for these.
+After committing the wrap-up, push the session branch one more time so the
+next session sees these changes.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 EXIT SIGNAL
@@ -535,13 +542,15 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
     # Task branches are created from it and merged back into it after each task.
     WORKTREE_DIR="${WORKTREE_BASE:-/tmp/orchestra-$(basename "$PROJECT_DIR")}/session-$(printf '%03d' $SESSION_COUNT)"
 
-    # Clean up any stale worktree at this path
-    if [ -d "$WORKTREE_DIR" ]; then
-        git worktree remove --force "$WORKTREE_DIR" 2>/dev/null || rm -rf "$WORKTREE_DIR"
-    fi
+    # Clean up any stale worktree (filesystem AND git registry)
+    git worktree remove --force "$WORKTREE_DIR" 2>/dev/null || true
+    rm -rf "$WORKTREE_DIR" 2>/dev/null
+    git worktree prune 2>/dev/null
 
-    git worktree add "$WORKTREE_DIR" "$SESSION_BRANCH" \
-        || die "Could not create worktree at $WORKTREE_DIR"
+    if ! git worktree add "$WORKTREE_DIR" "$SESSION_BRANCH" 2>&1; then
+        notify "ERROR: Could not create worktree at $WORKTREE_DIR"
+        exit 1
+    fi
     notify "   Worktree: $WORKTREE_DIR (branch: $SESSION_BRANCH)"
 
     # Snapshot state files before the session runs (from worktree)
