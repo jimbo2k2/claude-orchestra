@@ -307,7 +307,25 @@ Your assigned T-numbers are in the TASKS field of .orchestra/config. For each ta
    - All checkpoint gates auto-accept.
    - Decisions are logged as PROPOSED (human ratifies later).
    - New tasks discovered are logged as PROPOSED in TODO.md.
-   - Commits go on a branch (orchestra/<t-number>-<slug>), never main.
+   - Commits go on a task branch, never on main.
+
+   **Branching model (IMPORTANT):** Your worktree started on a session branch
+   (look at `git branch --show-current` — it will be `orchestra/session-NNN-*`).
+   For each task:
+   a. `git checkout <session-branch>` — return to the session branch
+   b. `git checkout -b orchestra/<t-number>-<slug>` — create task branch from
+      current session state (which includes all previously completed tasks)
+   c. Do the task work, commit, push the task branch
+   d. After step 19 commit & push, merge the task branch back into the session
+      branch so the next task sees the cumulative state:
+         git checkout <session-branch>
+         git merge orchestra/<t-number>-<slug>
+      (This will be a fast-forward merge since the task branch was the only
+      thing modifying the session branch.)
+
+   This means each task branch exists independently on the remote (for per-task
+   review) AND the session branch accumulates all completed work (for session-wide
+   review and for downstream tasks to build on).
 
 2. Create a session workspace at .orchestra/sessions/<T-number>/ with:
    - tasks.md — subtask decomposition + model recommendations
