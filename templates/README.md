@@ -11,8 +11,6 @@ Autonomous multi-session development. Claude Code sessions are spawned in sequen
 | `bin/orchestrator.sh` | Session loop manager | Bootstrap |
 | `hooks/stage-changes.sh` | PostToolUse hook — stages edited files | Bootstrap |
 | `lib/config.sh` | Shared config reader | Bootstrap |
-| `lib/verify-completion.sh` | Completion verifier (invoked by orchestrator, not hooks) | Bootstrap |
-| `lib/commit-and-update.sh` | Commit helper (invoked by orchestrator, not hooks) | Bootstrap |
 | `toolchain.md` | Task-agnostic stack reference | Human |
 | `CLAUDE.md` | Session rules — follow protocol in auto-proceed mode | Human |
 | `HANDOVER.md` | Session-to-session context | Claude |
@@ -65,7 +63,7 @@ Smoke test: creates throwaway branch, runs a synthetic task through the full pro
 
 1. Read config, validate paths, check tmux conflicts
 2. Create a **git worktree** at `WORKTREE_BASE/session-NNN` branching from main
-3. Read T-numbers, fetch descriptions from TODO.md (ignores status field)
+3. Read T-numbers from config TASKS field; look up details in TODO.md
 4. Read INBOX.md for queue-specific context
 5. For each task: follow `DEVELOPMENT-PROTOCOL.md` in auto-proceed mode
 6. Within session: complete tasks sequentially, evaluate context between tasks

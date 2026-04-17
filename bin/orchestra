@@ -107,7 +107,7 @@ cmd_init() {
         die ".orchestra/ already exists in $target_dir. Use 'orchestra reset' to start fresh."
     fi
 
-    echo "Initialising orchestra v2 in $target_dir"
+    echo "Initialising orchestra v3 in $target_dir"
 
     local config_lines=""
 
@@ -174,19 +174,45 @@ cmd_init() {
     mkdir -p "$orchestra_dir/sessions" "$orchestra_dir/archive"
 
     cat > "$orchestra_dir/config" << CONFIGEOF
-# .orchestra/config — Orchestra v2 configuration
-# Paths are relative to project root.
+# .orchestra/config — Orchestra v3 configuration
+# All settings for an Orchestra run. No env var overrides. No CLI args.
 
-# Governance file locations
+# ─── Task Queue ──────────────────────────────────────────────────────────────
+# Comma-separated T-numbers for this run. Sessions execute them in order.
+TASKS=
+
+# ─── Session Limits ──────────────────────────────────────────────────────────
+MAX_SESSIONS=10
+MAX_CONSECUTIVE_CRASHES=3
+
+# ─── Quota Pacing ────────────────────────────────────────────────────────────
+QUOTA_PACING=true
+QUOTA_THRESHOLD=80
+QUOTA_POLL_INTERVAL=120
+
+# ─── Cooldowns (seconds) ─────────────────────────────────────────────────────
+COOLDOWN_SECONDS=15
+CRASH_COOLDOWN_SECONDS=30
+
+# ─── Model ───────────────────────────────────────────────────────────────────
+MODEL=opus
+EFFORT=high
+
+# ─── Governance file locations ───────────────────────────────────────────────
 $(echo -e "$config_lines")
-# Strategic plan for current build (set before orchestra run)
-PLAN_FILE=
+# ─── Protocol ────────────────────────────────────────────────────────────────
+DEVELOPMENT_PROTOCOL=DEVELOPMENT-PROTOCOL.md
 
-# Toolchain (stack-specific build/test commands)
+# ─── Toolchain ───────────────────────────────────────────────────────────────
 TOOLCHAIN_FILE=.orchestra/toolchain.md
 
-# Standing acceptance criteria
-STANDING_AC_FILE=.orchestra/standing-ac.md
+# ─── Worktree ────────────────────────────────────────────────────────────────
+# Each session gets a worktree under this base — keeps main working tree clean
+WORKTREE_BASE=/tmp/orchestra-$(basename "$target_dir")
+
+# ─── Tmux ────────────────────────────────────────────────────────────────────
+# Orchestra always runs in a tmux session. Name is checked for conflicts.
+TMUX_SESSION=orchestra
 CONFIGEOF
     echo "   Created .orchestra/config"
 

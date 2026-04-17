@@ -9,7 +9,7 @@
 #   .orchestra/bin/orchestrator.sh
 #
 # The script will keep spawning Claude Code sessions until either:
-#   - All tasks in .orchestra/TODO.md are complete
+#   - All tasks listed in config TASKS are marked COMPLETE
 #   - Claude signals COMPLETE
 #   - MAX_SESSIONS is reached
 #   - Too many consecutive crashes occur
@@ -709,7 +709,7 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
     IFS=',' read -ra TASK_LIST <<< "$TASKS"
     for tn in "${TASK_LIST[@]}"; do
         tn=$(echo "$tn" | xargs)
-        if grep -A5 "### $tn" "$TODO_FILE" 2>/dev/null | grep -q 'Status:.*COMPLETE'; then
+        if read_todo_from_session | grep -A5 "### $tn" 2>/dev/null | grep -q 'Status:.*COMPLETE'; then
             : # done
         else
             REMAINING=$((REMAINING + 1))

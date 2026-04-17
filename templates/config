@@ -1,10 +1,10 @@
-# .orchestra/config — Orchestra v3 configuration
+# .orchestra/config — Orchestra v2 configuration
 # All settings for an Orchestra run. No env var overrides. No CLI args.
 
 # ─── Task Queue ──────────────────────────────────────────────────────────────
-# Comma-separated T-numbers for this run. Orchestra reads these from TODO.md,
-# ignores the status field, and sequences them intelligently.
-TASKS=
+# Comma-separated T-numbers for this run. Sessions execute them in the order
+# listed. Details (description, AC) come from TODO.md.
+TASKS=T325,T327
 
 # ─── Session Limits ──────────────────────────────────────────────────────────
 MAX_SESSIONS=10
@@ -36,8 +36,9 @@ DEVELOPMENT_PROTOCOL=DEVELOPMENT-PROTOCOL.md
 TOOLCHAIN_FILE=.orchestra/toolchain.md
 
 # ─── Worktree ────────────────────────────────────────────────────────────────
-# Orchestra runs in a git worktree so your main working tree stays untouched.
-WORKTREE_BASE=/tmp/orchestra
+# Orchestra runs in a git worktree so your main working tree stays on main.
+# Each session gets a fresh worktree branching from main.
+WORKTREE_BASE=/tmp/orchestra-logrings
 
 # ─── Tmux ────────────────────────────────────────────────────────────────────
 # Orchestra always runs in a tmux session. Name is checked for conflicts.
