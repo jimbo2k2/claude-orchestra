@@ -456,19 +456,22 @@ cmd_test() {
         done
         rm -rf "${WORKTREE_BASE_TEST:-/tmp/orchestra-test}" 2>/dev/null
 
-        # Delete test branches
-        if [ -f "$_TEST_SESSION_BRANCHES_FILE" ]; then
-            while IFS= read -r branch; do
-                [ -n "$branch" ] && git branch -D "$branch" 2>/dev/null || true
-            done < "$_TEST_SESSION_BRANCHES_FILE"
-            rm -f "$_TEST_SESSION_BRANCHES_FILE"
+        # Return to a safe branch before deleting the fixtures branch
+        local current_branch
+        current_branch=$(git branch --show-current 2>/dev/null)
+        if [ "$current_branch" = "$_TEST_FIXTURES_BRANCH" ]; then
+            git checkout main 2>/dev/null || git checkout - 2>/dev/null
         fi
-        # Clean up any stray test branches by prefix
-        for branch in $(git branch --list 'orchestra/t999*' --list 'orchestra/session-test-*' 2>/dev/null | tr -d ' *'); do
+
+        # Delete test branches
+        [ -n "${_TEST_FIXTURES_BRANCH:-}" ] && git branch -D "$_TEST_FIXTURES_BRANCH" 2>/dev/null || true
+
+        # Clean up any stray test task/session branches by prefix
+        for branch in $(git branch --list 'orchestra/t999*' --list 'orchestra/session-*' 2>/dev/null | tr -d ' *'); do
             [ -n "$branch" ] && git branch -D "$branch" 2>/dev/null || true
         done
 
-        # Remove test fixtures
+        # Remove test fixture files (from working tree — the branch with them was deleted)
         rm -f "$_TEST_CONFIG" "$_TEST_TODO"
         rm -rf "$_TEST_STATE_DIR"
 
@@ -476,7 +479,16 @@ cmd_test() {
     }
     trap cleanup_integration_test EXIT INT TERM
 
-    # ─── Create synthetic TODO file ─────────────────────────────────────────
+    # ─── Create a throwaway test-fixtures branch with synthetic tasks ──────
+    # The worktree will branch from this so T9998/T9999 exist in the worktree.
+    _TEST_FIXTURES_BRANCH="orchestra-test-fixtures-$(date -u +%Y%m%d-%H%M%S)"
+    local original_branch
+    original_branch=$(git -C "$project_dir" branch --show-current)
+
+    # Create a commit with synthetic fixtures on a new branch
+    git -C "$project_dir" checkout -b "$_TEST_FIXTURES_BRANCH" 2>/dev/null || \
+        die "Could not create test fixtures branch"
+
     cat > "$_TEST_TODO" <<'TODOEOF'
 # Test TODO (orchestra integration test)
 
@@ -484,16 +496,15 @@ cmd_test() {
 
 - **Module:** Test
 - **Status:** `[ ]` OPEN
-- **Detail:** Append a comment line `# Test session 1: <timestamp>` to `.orchestra/state-test/test-artifacts.md`. Create the file if it doesn't exist.
+- **Detail:** Append a line `# Test session 1: <timestamp>` to `.orchestra/test-artifacts.md`. Create the file if it doesn't exist.
 
 ### T9999 — Smoke test task 2
 
 - **Module:** Test
 - **Status:** `[ ]` OPEN
-- **Detail:** Append a comment line `# Test session 2: <timestamp>` to `.orchestra/state-test/test-artifacts.md`. The file should already exist from T9998 — verify this as proof the session branch accumulated T9998's work.
+- **Detail:** Append a line `# Test session 2: <timestamp>` to `.orchestra/test-artifacts.md`. The file should already exist from T9998 — verify this as proof the session branch accumulated T9998's work.
 TODOEOF
 
-    # ─── Create synthetic config ────────────────────────────────────────────
     cat > "$_TEST_CONFIG" <<CONFIGEOF
 # Test config — drives orchestra through a 2-session integration test
 TASKS=T9998,T9999
@@ -513,16 +524,14 @@ WORKTREE_BASE=/tmp/orchestra-test
 TMUX_SESSION=$_TEST_TMUX
 CONFIGEOF
 
+    # INBOX with forced-handover instruction
     mkdir -p "$_TEST_STATE_DIR"
-
-    # ─── Inject handover-forcing instruction via INBOX ─────────────────────
-    # Session 1 will see this and MUST hand over after T9998.
-    cat > "$_TEST_STATE_DIR/INBOX.md" <<INBOXEOF
+    cat > "$_TEST_STATE_DIR/INBOX.md" <<'INBOXEOF'
 # Inbox (test)
 
 ## Messages
 
-**SMOKE TEST OVERRIDE (2026-04-16):** This is an integration smoke test. After completing T9998, you MUST write HANDOVER and exit — do not start T9999. This forces a session boundary so we can verify session 2 picks up T9999 cleanly. Move this message to Processed before exiting.
+**SMOKE TEST OVERRIDE:** This is an integration smoke test. After completing T9998, you MUST write HANDOVER and exit — do not start T9999. This forces a session boundary so we can verify session 2 picks up T9999 cleanly. Move this message to Processed before exiting.
 
 ## Processed
 INBOXEOF
@@ -541,18 +550,23 @@ This is an Orchestra integration smoke test. Two synthetic tasks (T9998, T9999) 
 Session 1 will be instructed via INBOX to complete only T9998 then hand over.
 HOEOF
 
-    echo "Test fixtures created:"
-    echo "   Config:  $_TEST_CONFIG"
-    echo "   TODO:    $_TEST_TODO"
-    echo "   State:   $_TEST_STATE_DIR/"
+    # Commit fixtures to the test branch so the worktree inherits them
+    git -C "$project_dir" add "$_TEST_TODO" "$_TEST_CONFIG" "$_TEST_STATE_DIR"/ 2>/dev/null
+    git -C "$project_dir" commit -m "test: orchestra integration test fixtures" --no-verify 2>/dev/null \
+        || die "Could not commit test fixtures"
+
+    # Return to original branch so worktree has a clean base to branch from
+    git -C "$project_dir" checkout "$original_branch" 2>/dev/null || true
+
+    echo "Test fixtures committed to branch: $_TEST_FIXTURES_BRANCH"
     echo ""
     echo "Launching orchestrator with test config..."
     echo "Attach to watch: tmux attach -t $_TEST_TMUX"
     echo ""
 
     # ─── Run the orchestrator with the override config ─────────────────────
-    # Override STATE_DIR so session files go to the test dir, not the real .orchestra/
-    # Override the config source by setting ORCHESTRA_CONFIG
+    # ORCHESTRA_FIXTURES_BRANCH makes the orchestrator branch worktrees from the test
+    # fixtures branch instead of origin/main
     tmux has-session -t "$_TEST_TMUX" 2>/dev/null && \
         die "tmux session '$_TEST_TMUX' already exists. Kill it first: tmux kill-session -t $_TEST_TMUX"
 
@@ -560,6 +574,7 @@ HOEOF
         "cd $project_dir && \
          STATE_DIR=$_TEST_STATE_DIR \
          ORCHESTRA_CONFIG=$_TEST_CONFIG \
+         ORCHESTRA_FIXTURES_BRANCH=$_TEST_FIXTURES_BRANCH \
          bash $project_dir/.orchestra/bin/orchestrator.sh; \
          echo ''; echo 'Test orchestrator exited. Press any key to close.'; read -n1"
 
