@@ -2,160 +2,57 @@
 
 ## Tech Stack
 <!-- Customise this section for your project -->
-- Runtime: Node.js 20 / TypeScript 5.4
-- Framework: [e.g. Fastify, Express, Next.js]
-- Database: [e.g. PostgreSQL with Drizzle ORM]
+- Runtime: [e.g. Node.js 20 / Python 3.12]
+- Framework: [e.g. Fastify, Next.js, Django]
+- Database: [e.g. PostgreSQL]
 - Testing: [e.g. Vitest, Jest, pytest]
-- Deployment: [e.g. Digital Ocean App Platform, Docker]
 
 ## Architecture
 <!-- Describe your project structure so Claude can navigate effectively -->
 ```
 src/
-├── routes/       — HTTP route handlers, one file per resource
+├── routes/       — HTTP route handlers
 ├── models/       — Database schema definitions
-├── services/     — Business logic (no HTTP concerns)
-├── utils/        — Shared helpers and utilities
-└── middleware/    — Request middleware (auth, validation, etc.)
+├── services/     — Business logic
+└── utils/        — Shared helpers
 ```
 
 ## Conventions
-<!-- Project-specific rules Claude must follow -->
-- All async functions use explicit error handling
-- API responses follow the envelope pattern: `{ data, error, meta }`
-- Use descriptive variable names, avoid abbreviations
-- Keep functions under 50 lines where practical
-- Always add JSDoc comments to exported functions
-
-## Testing Requirements
-- Run the test suite after completing each logical change
-- Do NOT proceed to the next change if tests are failing
-- When adding new functionality, add corresponding tests
-- Test command: `npm test` <!-- change to your test runner -->
-
-## Git Rules
-- Do NOT run `git commit` — this is handled automatically by hooks
-- DO run `git add` for any newly created files (hooks only stage modified files)
-- Do NOT modify `.claude/settings.json` or files in the `scripts/` directory
-- Do NOT amend, rebase, or rewrite git history
+<!-- Document the rules every contributor (human or AI) follows -->
+- Code style, linting, formatter (e.g. prettier, ruff)
+- Commit message conventions
+- Branch naming
+- PR review expectations
 
 ---
+
+## Development Protocol
+
+All work — interactive and autonomous — follows `DEVELOPMENT-PROTOCOL.md` at repo root. This is the authoritative sequence from task intake to governance close-out.
+
+- **Interactive mode:** gates pause for human input at checkpoints
+- **Orchestra mode (autonomous):** gates auto-proceed; decisions logged as PROPOSED for human ratification
 
 ## Multi-Session Autonomous Workflow
 
-This project uses an orchestrated multi-session workflow. You are a stateless
-worker. Persistent state lives in files, not in your context. An external
-orchestrator will spawn new sessions after you finish.
+This project uses **Orchestra v3** for autonomous multi-session development. Full details in `.orchestra/CLAUDE.md`.
 
-**State files live in `.orchestra/`.** Do NOT create state files at the project root.
+### Governance
 
-### Session Start — Read State Files
+Three numbered, archivable files track all project work:
+- **TODO** (T-numbers) — tasks with status, dependencies
+- **DECISIONS** (D-numbers) — choices made with alternatives considered
+- **CHANGELOG** (C-numbers) — what changed, which task drove it
 
-At the start of every session, read these files IN THIS ORDER:
-1. `.orchestra/PLAN.md` — the overall goal, requirements, and acceptance criteria (skim; do not re-read every section if you already know the plan)
-2. `.orchestra/HANDOVER.md` — context from the previous session (most important for immediate work)
-3. `.orchestra/INBOX.md` — messages from the human operator (check for new instructions)
-4. `.orchestra/TODO.md` — the task backlog
-5. `.orchestra/DECISIONS.md` — autonomous decisions made by previous sessions (skim recent entries)
-6. `.orchestra/CHANGELOG.md` — history of what's been done (skim recent entries only)
+Paths configured in `.orchestra/config`. Each governance file has an archiving protocol in its `CLAUDE.md`.
 
-When making judgment calls — how to handle an edge case, whether to split a
-task, what to name something — refer back to `.orchestra/PLAN.md`. It is the
-source of truth for intent and design decisions.
+### Running Orchestra
 
-If `.orchestra/INBOX.md` has unprocessed messages (in the Messages section but
-not in Processed), follow those instructions BEFORE picking up your next TODO
-task. This may mean changing priorities, adjusting your approach, or adding new
-tasks. After acting on a message, MOVE it from Messages to the Processed section
-(delete the original from Messages) and add a brief response note.
+```bash
+# Edit .orchestra/config — set TASKS=T001,T002,...
+.orchestra/bin/orchestra run     # Starts in tmux, uses git worktree for isolation
+.orchestra/bin/orchestra test    # Smoke test — verify protocol wiring with synthetic tasks
+.orchestra/bin/orchestra status  # Show progress
+```
 
-**Important:** INBOX.md is only read and updated at session START — never during
-the wrap-up/state-file-update phase. This avoids edit clashes with the human
-operator who may write to it at any time.
-
-### Single-Task Discipline
-
-- Pick up ONLY the first unchecked item in `.orchestra/TODO.md`
-- Complete that ONE task fully before doing anything else
-- Do NOT start a second task, even if the first one was quick
-- If a task is too large for one session, break it into sub-tasks in `.orchestra/TODO.md`,
-  complete the first sub-task, and hand over
-
-### Context Management — CRITICAL
-
-Your session WILL be terminated if context is exhausted. Any work not saved
-to disk is lost. Protect yourself:
-
-1. **Use sub-agents** for exploratory work (reading files, investigating bugs).
-   Sub-agents have their own context and don't fill up yours.
-2. **Avoid reading large files entirely.** Read only the sections you need.
-   Use grep/search to find relevant lines first.
-3. **Monitor your own context.** If you've been working for a while and have
-   done significant back-and-forth, it's time to wrap up.
-4. **When in doubt, hand over early.** A clean handover with one task done is
-   far better than a crash with no state saved.
-5. **Run `/compact` BEFORE writing state files.** This frees context space
-   to ensure your state file updates complete successfully.
-
-### State File Updates — HIGHEST PRIORITY
-
-Updating state files is the SINGLE MOST IMPORTANT thing you do in a session.
-The orchestrator and future sessions depend entirely on these files.
-
-**When to update:** Immediately after finishing your task (or deciding to stop).
-After running `/compact`. Before any other wrap-up work.
-
-**Update order:**
-1. `.orchestra/TODO.md` — Check off completed items. Add any sub-tasks you discovered.
-   Move completed items to the Completed section.
-2. `.orchestra/DECISIONS.md` — If you made any autonomous decisions this session (chose an
-   approach not explicitly specified in PLAN.md, resolved an ambiguity, picked
-   between alternatives), append an entry. Skip if no decisions were needed.
-3. `.orchestra/CHANGELOG.md` — Append a new entry at the top of the session log:
-   ```
-   ## Session — [YYYY-MM-DD HH:MM UTC]
-   - What you did (be specific about files and changes)
-   - Decisions made (reference DECISIONS.md entries if any)
-   - Issues encountered
-   - Test results
-   ```
-4. `.orchestra/HANDOVER.md` — OVERWRITE completely (don't append). Include:
-   - **What just happened** — summary of this session's work
-   - **Watch out for** — gotchas, quirks, things that might trip up the next session
-   - **Key files modified** — list of files changed and why
-   - **Current test status** — do tests pass? any known failures?
-   - **Next step** — what the next session should do
-
-**After updating state files:** Stop immediately. Output your exit signal.
-Do NOT do further work after writing state files.
-
-### Exit Signals
-
-Your final output line must be EXACTLY one of these (no extra text on the line):
-- `HANDOVER` — you completed your task, more tasks remain in `.orchestra/TODO.md`
-- `COMPLETE` — ALL items in `.orchestra/TODO.md` are checked off AND tests pass
-- `BLOCKED` — you need human input to proceed (explain why in `.orchestra/HANDOVER.md`)
-
-### Recovery Sessions
-
-If your session prompt mentions a previous crash, the codebase may be in a
-partially modified state. Always run tests first to assess the damage before
-picking up new work.
-
-### Graduation
-
-When a build phase is complete, run `orchestra graduate` to:
-- Archive state files and session logs
-- Create a `docs/` skeleton for long-lived documentation
-- Reset orchestra for the next build
-
-See the graduation checklist output for consolidation steps.
-
----
-
-## Key Dependencies
-<!-- List important packages/libraries so Claude knows what's available -->
-<!-- e.g. -->
-<!-- - zod: schema validation -->
-<!-- - pino: logging -->
-<!-- - date-fns: date manipulation -->
+Orchestra runs in a **git worktree** so your main working tree stays on `main` untouched. All sessions in one orchestra run share a single session branch (`orchestra/run-<timestamp>`); task branches are created from it and merged back as each task completes.

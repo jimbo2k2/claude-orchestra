@@ -224,7 +224,8 @@ CONFIGEOF
 
     cp "$TEMPLATE_DIR/toolchain.md" "$orchestra_dir/toolchain.md"
     cp "$TEMPLATE_DIR/standing-ac.md" "$orchestra_dir/standing-ac.md"
-    echo "   Created .orchestra/ with operational files, toolchain, standing AC"
+    cp "$TEMPLATE_DIR/orchestra-CLAUDE.md" "$orchestra_dir/CLAUDE.md"
+    echo "   Created .orchestra/ with operational files, toolchain, standing AC, autonomous session rules"
 
     if [ -f "$target_dir/CLAUDE.md" ]; then
         if grep -q "## Multi-Session Autonomous Workflow" "$target_dir/CLAUDE.md" 2>/dev/null; then
