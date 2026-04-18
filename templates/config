@@ -35,7 +35,7 @@ DEVELOPMENT_PROTOCOL=DEVELOPMENT-PROTOCOL.md
 TOOLCHAIN_FILE=.orchestra/toolchain.md
 
 # ─── Worktree ────────────────────────────────────────────────────────────────
-# Each session gets a worktree under this base — keeps main working tree clean
+# One persistent worktree per run, created at WORKTREE_BASE/run-<timestamp>
 WORKTREE_BASE=/tmp/orchestra-PROJECT_NAME
 
 # ─── Tmux ────────────────────────────────────────────────────────────────────

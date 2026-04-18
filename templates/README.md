@@ -32,7 +32,7 @@ Edit `config`: set `TASKS=T315,T325,T327` (comma-separated T-numbers). Set `MAX_
 .orchestra/bin/orchestra run
 ```
 
-Orchestra always runs inside a tmux session (name from `TMUX_SESSION` in config). It checks for name conflicts before creating. Each session runs in a **git worktree** at `WORKTREE_BASE` — your main working tree stays on `main` untouched.
+Orchestra always runs inside a tmux session (name from `TMUX_SESSION` in config). It checks for name conflicts before creating. Each run gets a **persistent git worktree** at `WORKTREE_BASE/<run-timestamp>` — your main working tree stays on `main` untouched. The worktree is reused across sessions and preserved after the run for review.
 
 ### 2b. Pass queue-specific context (optional)
 
@@ -62,14 +62,15 @@ Smoke test: creates throwaway branch, runs a synthetic task through the full pro
 ## Session Lifecycle
 
 1. Read config, validate paths, check tmux conflicts
-2. Create a **git worktree** at `WORKTREE_BASE/session-NNN` branching from main
+2. Create a **persistent git worktree** at `WORKTREE_BASE/run-<timestamp>` branching from main
 3. Read T-numbers from config TASKS field; look up details in TODO.md
 4. Read INBOX.md for queue-specific context
 5. For each task: follow `DEVELOPMENT-PROTOCOL.md` in auto-proceed mode
 6. Within session: complete tasks sequentially, evaluate context between tasks
 7. Session wrap-up (protocol Part 2) before handoff
-8. Push task branches, clean up worktree
-9. On crash: partial state preserved for recovery; worktree cleaned up
+8. Push task branches; worktree reset to clean state for next session
+9. On crash: partial state preserved for recovery; worktree reset for retry
+10. After run completes: worktree preserved for human review
 
 ## Exit Codes
 

@@ -20,9 +20,9 @@ Read T-numbers from `.orchestra/config` `TASKS` field. Ignore TODO.md status fie
 
 ## Worktree + Branching Model
 
-Orchestra sessions run in a **git worktree** — an isolated copy of the repo at a temporary path. The main working tree stays on `main` untouched.
+Orchestra sessions run in a **persistent git worktree** — an isolated copy of the repo at `WORKTREE_BASE/run-<timestamp>`. The main working tree stays on `main` untouched. The worktree is created once per run and reused across sessions (reset to a clean state between sessions).
 
-The worktree is checked out on a **session branch** named `orchestra/run-<timestamp>` that's shared across all sessions in the same orchestra run. The session branch accumulates all completed task work.
+The worktree is checked out on a **session branch** named `orchestra/run-<timestamp>` that's shared across all sessions in the same orchestra run. The session branch accumulates all completed task work. The worktree is preserved after the run for human review.
 
 For each task:
 1. Return to the session branch: `git checkout <session-branch>` (the orchestrator passes you the name)

@@ -9,19 +9,20 @@ Orchestra v3 is **project-local** — no global install, no `~/claude-scripts/`.
 Key changes from v2:
 - **Protocol-driven:** sessions follow `DEVELOPMENT-PROTOCOL.md` (a 20-step task sequence with gates)
 - **Config-driven:** all run parameters in `.orchestra/config` — no env vars, no CLI args
-- **Worktree isolation:** each session runs in a git worktree so your main working tree stays on `main`
+- **Worktree isolation:** each run gets a persistent git worktree so your main working tree stays on `main`
 - **Single settings.json:** no more settings swap between interactive and autonomous
 - **Staging hook only:** Stop hooks removed — the protocol defines when commits happen
 
 ## How it works
 
 1. You set `TASKS=T001,T002,T003` in `.orchestra/config`
-2. Orchestra creates a tmux session and a git worktree
+2. Orchestra creates a tmux session and a persistent git worktree for the run
 3. Claude reads `DEVELOPMENT-PROTOCOL.md` and follows it in auto-proceed mode
-4. Each task gets its own branch within the worktree
+4. Each task gets its own branch within the worktree, merged back into the session branch
 5. Governance files (TODO, DECISIONS, CHANGELOG) are synced back to the main tree
-6. The worktree is cleaned up after each session
+6. Between sessions, the worktree is reset to a clean state and reused
 7. Orchestra spawns the next session until all tasks are complete
+8. The worktree is preserved after the run for human review
 
 ## Installation
 
@@ -72,7 +73,7 @@ Write to `.orchestra/INBOX.md` before launching. The session reads it at startup
 
 ### `.orchestra/bin/orchestra run`
 
-Starts the session loop in a tmux session. Creates a git worktree per session. Runs until all assigned tasks are complete, BLOCKED, or limits reached.
+Starts the session loop in a tmux session. Creates one persistent git worktree for the run (named by run timestamp). Runs until all assigned tasks are complete, BLOCKED, or limits reached. The worktree is preserved after the run for review.
 
 ### `.orchestra/bin/orchestra test`
 
@@ -95,7 +96,7 @@ TASKS=T001,T002,T003          # Comma-separated T-numbers
 MAX_SESSIONS=10                # Session limit
 MODEL=opus                     # Default model
 EFFORT=high                    # Default effort
-WORKTREE_BASE=/tmp/orchestra   # Worktree location
+WORKTREE_BASE=/tmp/orchestra   # Worktree parent (run folder created inside)
 TMUX_SESSION=orchestra         # Tmux session name
 QUOTA_PACING=true              # Pause when quota is high
 QUOTA_THRESHOLD=80             # Utilization % to trigger pause

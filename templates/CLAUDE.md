@@ -55,4 +55,4 @@ Paths configured in `.orchestra/config`. Each governance file has an archiving p
 .orchestra/bin/orchestra status  # Show progress
 ```
 
-Orchestra runs in a **git worktree** so your main working tree stays on `main` untouched. All sessions in one orchestra run share a single session branch (`orchestra/run-<timestamp>`); task branches are created from it and merged back as each task completes.
+Orchestra runs in a **persistent git worktree** (at `WORKTREE_BASE/run-<timestamp>`) so your main working tree stays on `main` untouched. The worktree is created once per run and reused across sessions. All sessions share a single session branch (`orchestra/run-<timestamp>`); task branches are created from it and merged back as each task completes. The worktree is preserved after the run for human review.
