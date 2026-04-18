@@ -467,21 +467,28 @@ read_todo_from_session() {
     fi
 }
 
-cleanup_worktree() {
+# Push all branches from worktree to origin
+push_branches() {
     if [ -n "${WORKTREE_DIR:-}" ] && [ -d "${WORKTREE_DIR:-}" ]; then
         cd "$PROJECT_DIR"
-        # Push the session branch (it has all completed task work merged in)
         git push origin "$SESSION_BRANCH" 2>/dev/null && notify "   Pushed session branch: $SESSION_BRANCH" || true
-        # Push any task branches Claude created (already merged into session branch)
-        for branch in $(git -C "$WORKTREE_DIR" branch --list 'orchestra/t*' 2>/dev/null | tr -d ' *' || true); do
+        for branch in $(git -C "$WORKTREE_DIR" branch --list 'orchestra/t*' 2>/dev/null | tr -d ' *+' || true); do
             git push origin "$branch" 2>/dev/null && notify "   Pushed task branch: $branch" || true
         done
-        git worktree remove --force "$WORKTREE_DIR" 2>/dev/null || rm -rf "$WORKTREE_DIR"
-        notify "   Worktree cleaned up: $WORKTREE_DIR"
     fi
 }
 
-trap 'cleanup_worktree; stop_ram_monitor; cleanup_lock; rm -f "$QUOTA_STATE_FILE"' EXIT
+# Reset worktree to clean session-branch state for next session
+reset_worktree() {
+    if [ -n "${WORKTREE_DIR:-}" ] && [ -d "${WORKTREE_DIR:-}" ]; then
+        cd "$WORKTREE_DIR"
+        git checkout "$SESSION_BRANCH" 2>/dev/null || true
+        git reset --hard 2>/dev/null || true
+        git clean -fd 2>/dev/null || true
+    fi
+}
+
+trap 'push_branches; stop_ram_monitor; cleanup_lock; rm -f "$QUOTA_STATE_FILE"; [ -n "${WORKTREE_DIR:-}" ] && [ -d "${WORKTREE_DIR:-}" ] && notify "   Worktree preserved for review: ${WORKTREE_DIR}"' EXIT
 start_ram_monitor
 
 # ─── Main loop state ─────────────────────────────────────────────────────────
@@ -507,6 +514,21 @@ git fetch origin main 2>/dev/null || true
 SESSION_BRANCH="orchestra/run-$(date -u +%Y%m%d-%H%M%S)"
 git branch "$SESSION_BRANCH" origin/main 2>/dev/null || git branch "$SESSION_BRANCH" main
 notify "   Session branch: $SESSION_BRANCH"
+
+# ─── Run worktree (one per orchestra run, reused across sessions) ─────────
+RUN_NAME="${SESSION_BRANCH#orchestra/}"
+WORKTREE_DIR="${WORKTREE_BASE:-/tmp/orchestra-$(basename "$PROJECT_DIR")}/$RUN_NAME"
+
+# Clean up any stale worktree at this path (filesystem AND git registry)
+git worktree remove --force "$WORKTREE_DIR" 2>/dev/null || true
+rm -rf "$WORKTREE_DIR" 2>/dev/null
+git worktree prune 2>/dev/null
+
+if ! git worktree add "$WORKTREE_DIR" "$SESSION_BRANCH" 2>&1; then
+    notify "ERROR: Could not create worktree at $WORKTREE_DIR"
+    exit 1
+fi
+notify "   Worktree: $WORKTREE_DIR (branch: $SESSION_BRANCH)"
 
 while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
     # ─── Quota pacing: check before spawning ─────────────────────────────
@@ -537,23 +559,13 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
     CURRENT_PROMPT="${CURRENT_PROMPT//__ORCH_CONFIG__/$CONFIG_PATH_REL}"
     CURRENT_PROMPT="${CURRENT_PROMPT//__SESSION_BRANCH__/$SESSION_BRANCH}"
 
-    # ─── Worktree setup ─────────────────────────────────────────────────────
-    # All sessions in this orchestra run check out the SAME session branch.
-    # Task branches are created from it and merged back into it after each task.
-    WORKTREE_DIR="${WORKTREE_BASE:-/tmp/orchestra-$(basename "$PROJECT_DIR")}/session-$(printf '%03d' $SESSION_COUNT)"
-
-    # Clean up any stale worktree (filesystem AND git registry)
-    git worktree remove --force "$WORKTREE_DIR" 2>/dev/null || true
-    rm -rf "$WORKTREE_DIR" 2>/dev/null
-    git worktree prune 2>/dev/null
-
-    if ! git worktree add "$WORKTREE_DIR" "$SESSION_BRANCH" 2>&1; then
-        notify "ERROR: Could not create worktree at $WORKTREE_DIR"
-        exit 1
+    # ─── Worktree reset ─────────────────────────────────────────────────────
+    # Persistent worktree: reset to clean session-branch state between sessions.
+    # First session uses the worktree as-is (just created before the loop).
+    if [ "$SESSION_COUNT" -gt 1 ]; then
+        reset_worktree
     fi
-    notify "   Worktree: $WORKTREE_DIR (branch: $SESSION_BRANCH)"
 
-    # Snapshot state files before the session runs (from worktree)
     cd "$WORKTREE_DIR"
     PRE_STATE=$(snapshot_state_files)
 
@@ -649,7 +661,7 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
             exit 1
         fi
 
-        cleanup_worktree
+        push_branches
         cd "$PROJECT_DIR"
         notify "   Retrying in ${CRASH_COOLDOWN_SECONDS}s..."
         sleep "$CRASH_COOLDOWN_SECONDS"
@@ -730,8 +742,8 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
         exit 0
     fi
 
-    # Clean up worktree before starting next session
-    cleanup_worktree
+    # Push completed work (worktree persists for next session)
+    push_branches
 
     notify "Session $SESSION_COUNT handed over. $REMAINING assigned tasks remain. Next in ${COOLDOWN_SECONDS}s..."
     sleep "$COOLDOWN_SECONDS"

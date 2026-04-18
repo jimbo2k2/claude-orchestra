@@ -552,9 +552,19 @@ cmd_test() {
 
     # ─── Auto cleanup of test artifacts ─────────────────────────────────────
     echo "Cleaning up test artifacts..."
+    # Remove test worktrees left by persistent-worktree mode (before deleting branches)
+    git -C "$project_dir" worktree list 2>/dev/null | while IFS= read -r line; do
+        local wt_path wt_branch
+        wt_path=$(echo "$line" | awk '{print $1}')
+        wt_branch=$(echo "$line" | sed 's/.*\[//;s/\]//')
+        if echo "$wt_branch" | grep -qE "^orchestra/run-|^orchestra/t999"; then
+            git -C "$project_dir" worktree remove --force "$wt_path" 2>/dev/null && echo "   Removed test worktree: $wt_path" || true
+        fi
+    done
     git -C "$project_dir" worktree prune 2>/dev/null
-    for branch in $(git -C "$project_dir" branch --list 'orchestra/run-*' 'orchestra/t9998-*' 'orchestra/t9999-*' 2>/dev/null | tr -d ' *'); do
-        git -C "$project_dir" branch -D "$branch" 2>/dev/null && echo "   Deleted $branch" || true
+    for branch in $(git -C "$project_dir" branch --list 'orchestra/run-*' 'orchestra/t9998-*' 'orchestra/t9999-*' 2>/dev/null | tr -d ' *+'); do
+        git -C "$project_dir" branch -D "$branch" 2>/dev/null && echo "   Deleted local $branch" || true
+        git -C "$project_dir" push origin --delete "$branch" 2>/dev/null && echo "   Deleted remote $branch" || true
     done
     # Reset .orchestra/test/ to its committed state (in case anything leaked into main tree)
     git -C "$project_dir" checkout -- .orchestra/test/ 2>/dev/null
