@@ -467,13 +467,16 @@ read_todo_from_session() {
     fi
 }
 
-# Push all branches from worktree to origin
+# Push branches created during this run to origin
 push_branches() {
     if [ -n "${WORKTREE_DIR:-}" ] && [ -d "${WORKTREE_DIR:-}" ]; then
         cd "$PROJECT_DIR"
         git push origin "$SESSION_BRANCH" 2>/dev/null && notify "   Pushed session branch: $SESSION_BRANCH" || true
         for branch in $(git -C "$WORKTREE_DIR" branch --list 'orchestra/t*' 2>/dev/null | tr -d ' *+' || true); do
-            git push origin "$branch" 2>/dev/null && notify "   Pushed task branch: $branch" || true
+            # Only push branches created during this run (skip pre-existing ones)
+            if ! echo "$PRE_RUN_TASK_BRANCHES" | grep -qx "$branch"; then
+                git push origin "$branch" 2>/dev/null && notify "   Pushed task branch: $branch" || true
+            fi
         done
     fi
 }
@@ -529,6 +532,9 @@ if ! git worktree add "$WORKTREE_DIR" "$SESSION_BRANCH" 2>&1; then
     exit 1
 fi
 notify "   Worktree: $WORKTREE_DIR (branch: $SESSION_BRANCH)"
+
+# Snapshot existing task branches so push_branches only pushes new ones
+PRE_RUN_TASK_BRANCHES=$(git branch --list 'orchestra/t*' 2>/dev/null | tr -d ' *+')
 
 while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
     # ─── Quota pacing: check before spawning ─────────────────────────────
