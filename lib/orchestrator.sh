@@ -533,6 +533,22 @@ if ! git worktree add "$WORKTREE_DIR" "$SESSION_BRANCH" 2>&1; then
 fi
 notify "   Worktree: $WORKTREE_DIR (branch: $SESSION_BRANCH)"
 
+# ─── Copy gitignored env files into worktree ─────────────────────────────────
+# These are gitignored so worktrees don't inherit them. Copy from the main
+# project so the worktree is immediately testable. Since they're gitignored,
+# git clean -fd won't remove them between sessions — one-time copy suffices.
+if [ -n "${ENV_FILES:-}" ]; then
+    IFS=',' read -ra ENV_LIST <<< "$ENV_FILES"
+    for env_file in "${ENV_LIST[@]}"; do
+        env_file=$(echo "$env_file" | xargs)
+        if [ -f "$PROJECT_DIR/$env_file" ]; then
+            mkdir -p "$(dirname "$WORKTREE_DIR/$env_file")"
+            cp -P "$PROJECT_DIR/$env_file" "$WORKTREE_DIR/$env_file"
+        fi
+    done
+    notify "   Copied env files: $ENV_FILES"
+fi
+
 # Snapshot existing task branches so push_branches only pushes new ones
 PRE_RUN_TASK_BRANCHES=$(git branch --list 'orchestra/t*' 2>/dev/null | tr -d ' *+')
 
@@ -544,7 +560,7 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
 
     SESSION_COUNT=$((SESSION_COUNT + 1))
     SESSION_TIMESTAMP="$(date -u +%Y%m%d-%H%M%S)"
-    SESSION_LOG="$LOG_DIR/$SESSION_TIMESTAMP-session-$(printf '%03d' $SESSION_COUNT).json"
+    SESSION_LOG="$WORKTREE_DIR/.orchestra/sessions/$SESSION_TIMESTAMP-session-$(printf '%03d' $SESSION_COUNT).json"
 
     # Choose prompt based on whether previous session crashed
     if [ "$USE_RECOVERY_PROMPT" = true ]; then
@@ -626,6 +642,22 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
     EXIT_CODE=${PIPESTATUS[0]}
     set -eo pipefail
 
+    # ─── Snapshot state after Claude, before orchestrator bookkeeping ──────────
+    # Captures whether Claude did real work. Must be taken BEFORE the session-log
+    # commit, which advances HEAD and would pollute the comparison.
+    POST_CLAUDE_STATE=$(snapshot_state_files)
+
+    # ─── Commit session log into worktree ──────────────────────────────────────
+    # The session JSON was written by tee (not a Claude tool call), so the
+    # staging hook never fires for it. Commit it now so reset_worktree can't
+    # destroy it, and so it appears in the session branch history alongside
+    # the T-folder artifacts (tasks.md, log.md) that Claude committed.
+    if [ -f "$SESSION_LOG" ]; then
+        cd "$WORKTREE_DIR"
+        git add "$SESSION_LOG" 2>/dev/null || true
+        git commit -m "auto: session $SESSION_COUNT log ($SESSION_TIMESTAMP)" --no-verify 2>/dev/null || true
+    fi
+
     # ─── Extract quota state from session log ─────────────────────────────────
     if [ "$QUOTA_PACING" = "true" ]; then
         extract_session_quota "$SESSION_LOG"
@@ -641,7 +673,7 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
 
         # Sync governance from worktree before checking state
 
-        if state_files_changed "$PRE_STATE"; then
+        if [ "$PRE_STATE" != "$POST_CLAUDE_STATE" ]; then
             # v2 INVERSION: v1 treated governance-changed as safe (USE_RECOVERY_PROMPT=false).
             # v2 treats it as needing damage assessment because governance may be
             # half-written (e.g. task set to IN_PROGRESS but not completed). See spec 6.3.
@@ -689,7 +721,7 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
     # ─── Detect stalled progress (clean exit but no state changes) ────────────
     # This catches sessions that ran but didn't actually do or record anything.
 
-    if ! state_files_changed "$PRE_STATE"; then
+    if [ "$PRE_STATE" = "$POST_CLAUDE_STATE" ]; then
         CONSECUTIVE_CRASHES=$((CONSECUTIVE_CRASHES + 1))
         notify "Session $SESSION_COUNT exited cleanly but state files unchanged. Stall $CONSECUTIVE_CRASHES/$MAX_CONSECUTIVE_CRASHES"
 
