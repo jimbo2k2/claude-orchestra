@@ -592,7 +592,7 @@ shift 2>/dev/null || true
 
 case "$COMMAND" in
     init)   cmd_init "$@" ;;
-    run)    cmd_run "$@" ;;
+    run|start) cmd_run "$@" ;;
     test)   cmd_test "$@" ;;
     reset)    cmd_reset "$@" ;;
     status)   cmd_status "$@" ;;
