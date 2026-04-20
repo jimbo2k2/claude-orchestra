@@ -2,13 +2,13 @@
 
 Follow `DEVELOPMENT-PROTOCOL.md` in **auto-proceed mode** (all gates auto-accept).
 
-## Session Workspace
+## Run Workspace
 
-Each task gets `.orchestra/sessions/<T-number>/` with:
-- `tasks.md` — subtask decomposition + model recommendations
-- `log.md` — session decisions, findings, parked issues
+Each orchestra run gets a single folder at `.orchestra/sessions/run-<timestamp>/` (the orchestrator creates it and passes the name via the prompt). Inside:
+- `tasks.md` — cumulative subtask list across all tasks in this run
+- `log.md` — cumulative session decisions, findings, parked issues
 
-Archive completed workspaces to `.orchestra/sessions/archive/`.
+If files already exist from a previous session in this run, append rather than overwrite. The orchestrator also writes session JSON logs into this folder.
 
 ## Session Grouping
 

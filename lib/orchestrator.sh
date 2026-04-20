@@ -338,9 +338,11 @@ Your assigned T-numbers are in the TASKS field of .orchestra/config. For each ta
    review) AND the session branch accumulates all completed work (for session-wide
    review and for downstream tasks to build on).
 
-2. Create a session workspace at .orchestra/sessions/<T-number>/ with:
-   - tasks.md — subtask decomposition + model recommendations
-   - log.md — session decisions, findings, parked issues
+2. Create or update the run workspace at .orchestra/sessions/__RUN_NAME__/ with:
+   - tasks.md — cumulative subtask list across all tasks in this run
+   - log.md — cumulative session decisions, findings, parked issues
+   If the files already exist from a previous session in this run, append to
+   them rather than overwriting.
 
 3. If a task has a genuine blocker you cannot resolve autonomously, mark it
    BLOCKED in TODO.md with a reason and move to the next task.
@@ -533,6 +535,13 @@ if ! git worktree add "$WORKTREE_DIR" "$SESSION_BRANCH" 2>&1; then
 fi
 notify "   Worktree: $WORKTREE_DIR (branch: $SESSION_BRANCH)"
 
+# ─── Create run workspace folder inside worktree ─────────────────────────────
+# All session artifacts (JSON logs, tasks.md, log.md) go here — one folder
+# per orchestra invocation, named to match the worktree/branch.
+RUN_WORKSPACE="$WORKTREE_DIR/.orchestra/sessions/$RUN_NAME"
+mkdir -p "$RUN_WORKSPACE"
+notify "   Run workspace: .orchestra/sessions/$RUN_NAME"
+
 # ─── Copy gitignored env files into worktree ─────────────────────────────────
 # These are gitignored so worktrees don't inherit them. Copy from the main
 # project so the worktree is immediately testable. Since they're gitignored,
@@ -560,7 +569,7 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
 
     SESSION_COUNT=$((SESSION_COUNT + 1))
     SESSION_TIMESTAMP="$(date -u +%Y%m%d-%H%M%S)"
-    SESSION_LOG="$WORKTREE_DIR/.orchestra/sessions/$SESSION_TIMESTAMP-session-$(printf '%03d' $SESSION_COUNT).json"
+    SESSION_LOG="$RUN_WORKSPACE/session-$(printf '%03d' $SESSION_COUNT).json"
 
     # Choose prompt based on whether previous session crashed
     if [ "$USE_RECOVERY_PROMPT" = true ]; then
@@ -580,6 +589,7 @@ while [ "$SESSION_COUNT" -lt "$MAX_SESSIONS" ]; do
     CURRENT_PROMPT="${CURRENT_PROMPT//__STATE_DIR__/$STATE_DIR_REL}"
     CURRENT_PROMPT="${CURRENT_PROMPT//__ORCH_CONFIG__/$CONFIG_PATH_REL}"
     CURRENT_PROMPT="${CURRENT_PROMPT//__SESSION_BRANCH__/$SESSION_BRANCH}"
+    CURRENT_PROMPT="${CURRENT_PROMPT//__RUN_NAME__/$RUN_NAME}"
 
     # ─── Worktree reset ─────────────────────────────────────────────────────
     # Persistent worktree: reset to clean session-branch state between sessions.
