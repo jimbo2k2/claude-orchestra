@@ -515,10 +515,13 @@ fi
 # ─── Session branch (one per orchestra run, used by all sessions) ────────────
 # Created once here, reused across all sessions. Each session worktree checks
 # out THIS branch. Task branches branch from it and merge back into it.
-git fetch origin main 2>/dev/null || true
+# Base branch defaults to main; override via BASE_BRANCH in .orchestra/config
+# when reviewing or building on top of a feature branch.
+BASE_BRANCH="${BASE_BRANCH:-main}"
+git fetch origin "$BASE_BRANCH" 2>/dev/null || true
 SESSION_BRANCH="orchestra/run-$(date -u +%Y%m%d-%H%M%S)"
-git branch "$SESSION_BRANCH" origin/main 2>/dev/null || git branch "$SESSION_BRANCH" main
-notify "   Session branch: $SESSION_BRANCH"
+git branch "$SESSION_BRANCH" "origin/$BASE_BRANCH" 2>/dev/null || git branch "$SESSION_BRANCH" "$BASE_BRANCH"
+notify "   Session branch: $SESSION_BRANCH (base: $BASE_BRANCH)"
 
 # ─── Run worktree (one per orchestra run, reused across sessions) ─────────
 RUN_NAME="${SESSION_BRANCH#orchestra/}"
