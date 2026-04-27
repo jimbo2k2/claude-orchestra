@@ -46,6 +46,12 @@ This means dependent tasks see prior work, and the session branch is a coherent 
 
 ## Conventions
 
-When writing or modifying code, follow `logrings-app/CLAUDE.md` for commenting, logging, and naming conventions. Use `@shared/logging`, not bare `console.*`.
+Project-specific conventions for code style, logging, naming, and per-feature workflows are defined in the project's root `CLAUDE.md` (and any nested `CLAUDE.md` files in subdirectories). Read those first and follow them when modifying code.
 
-If a task adds, renames, or removes a screen, follow the screen-map workflow in `Product/CLAUDE.md § Screen Map (D182)`.
+Examples of conventions that typically belong in the root `CLAUDE.md`:
+- Code style and formatter (e.g. prettier, ruff, gofmt)
+- Logging conventions (e.g. use a shared logger module, never bare `console.*`/`print`)
+- Test layout and naming
+- Branch and commit message formats
+
+If your project has subsystem-specific protocols (e.g. a screen-map workflow, a migrations checklist, a public-API change process), document them in the relevant subdirectory's `CLAUDE.md` and reference them here.
