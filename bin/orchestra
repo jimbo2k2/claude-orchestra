@@ -173,6 +173,20 @@ cmd_init() {
 
     mkdir -p "$orchestra_dir/sessions" "$orchestra_dir/archive"
 
+    # ─── Project-pinned runtime ──────────────────────────────────────────────
+    # Each project gets its own copy of the orchestra runtime under .orchestra/.
+    # This pins the project to a known version and lets the .claude/settings.json
+    # PostToolUse hook resolve via a project-relative path.
+    mkdir -p "$orchestra_dir/bin" "$orchestra_dir/lib" "$orchestra_dir/hooks"
+    cp "$SCRIPT_DIR/orchestra"        "$orchestra_dir/bin/orchestra"
+    cp "$LIB_DIR/orchestrator.sh"     "$orchestra_dir/bin/orchestrator.sh"
+    cp "$LIB_DIR/config.sh"           "$orchestra_dir/lib/config.sh"
+    cp "$LIB_DIR/stage-changes.sh"    "$orchestra_dir/hooks/stage-changes.sh"
+    chmod +x "$orchestra_dir/bin/orchestra" \
+             "$orchestra_dir/bin/orchestrator.sh" \
+             "$orchestra_dir/hooks/stage-changes.sh"
+    echo "   Created .orchestra/bin/, .orchestra/lib/, .orchestra/hooks/ (project-pinned runtime)"
+
     cat > "$orchestra_dir/config" << CONFIGEOF
 # .orchestra/config — Orchestra v3 configuration
 # All settings for an Orchestra run. No env var overrides. No CLI args.
@@ -242,6 +256,13 @@ CONFIGEOF
             cp "$TEMPLATE_DIR/CLAUDE.md" "$target_dir/CLAUDE.md"
             echo "   Created CLAUDE.md from template"
         fi
+    fi
+
+    # DEVELOPMENT-PROTOCOL.md is required at project root by preflight_check.
+    # Don't clobber if user already has one.
+    if [ ! -f "$target_dir/DEVELOPMENT-PROTOCOL.md" ] && [ -f "$TEMPLATE_DIR/DEVELOPMENT-PROTOCOL.md" ]; then
+        cp "$TEMPLATE_DIR/DEVELOPMENT-PROTOCOL.md" "$target_dir/DEVELOPMENT-PROTOCOL.md"
+        echo "   Created DEVELOPMENT-PROTOCOL.md from template"
     fi
 
     local claude_dir="$target_dir/.claude"
@@ -386,7 +407,7 @@ cmd_status() {
     source "$LIB_DIR/config.sh"
     load_orchestra_config "$project_dir" || die "Failed to load .orchestra/config"
 
-    echo "=== Orchestra v2 Status ==="
+    echo "=== Orchestra v3 Status ==="
     echo ""
 
     if [ -f "$TODO_FILE" ]; then
