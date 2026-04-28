@@ -21,6 +21,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/../lib"
+HOOKS_DIR="$SCRIPT_DIR/../hooks"
 TEMPLATE_DIR="$SCRIPT_DIR/../templates"
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -178,10 +179,10 @@ cmd_init() {
     # This pins the project to a known version and lets the .claude/settings.json
     # PostToolUse hook resolve via a project-relative path.
     mkdir -p "$orchestra_dir/bin" "$orchestra_dir/lib" "$orchestra_dir/hooks"
-    cp "$SCRIPT_DIR/orchestra"        "$orchestra_dir/bin/orchestra"
-    cp "$LIB_DIR/orchestrator.sh"     "$orchestra_dir/bin/orchestrator.sh"
-    cp "$LIB_DIR/config.sh"           "$orchestra_dir/lib/config.sh"
-    cp "$LIB_DIR/stage-changes.sh"    "$orchestra_dir/hooks/stage-changes.sh"
+    cp "$SCRIPT_DIR/orchestra"          "$orchestra_dir/bin/orchestra"
+    cp "$SCRIPT_DIR/orchestrator.sh"    "$orchestra_dir/bin/orchestrator.sh"
+    cp "$LIB_DIR/config.sh"             "$orchestra_dir/lib/config.sh"
+    cp "$HOOKS_DIR/stage-changes.sh"    "$orchestra_dir/hooks/stage-changes.sh"
     chmod +x "$orchestra_dir/bin/orchestra" \
              "$orchestra_dir/bin/orchestrator.sh" \
              "$orchestra_dir/hooks/stage-changes.sh"

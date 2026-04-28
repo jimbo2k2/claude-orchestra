@@ -28,8 +28,8 @@ mkdir -p "$PROJECT_DIR/.orchestra/sessions/archive"
 
 # Copy scripts
 cp "$REPO_DIR/bin/orchestra" "$PROJECT_DIR/.orchestra/bin/orchestra"
-cp "$REPO_DIR/lib/orchestrator.sh" "$PROJECT_DIR/.orchestra/bin/orchestrator.sh"
-cp "$REPO_DIR/lib/stage-changes.sh" "$PROJECT_DIR/.orchestra/hooks/stage-changes.sh"
+cp "$REPO_DIR/bin/orchestrator.sh" "$PROJECT_DIR/.orchestra/bin/orchestrator.sh"
+cp "$REPO_DIR/hooks/stage-changes.sh" "$PROJECT_DIR/.orchestra/hooks/stage-changes.sh"
 cp "$REPO_DIR/lib/config.sh" "$PROJECT_DIR/.orchestra/lib/config.sh"
 
 chmod +x "$PROJECT_DIR/.orchestra/bin/orchestra" "$PROJECT_DIR/.orchestra/bin/orchestrator.sh"
