@@ -88,13 +88,41 @@ Before signalling COMPLETE, you MUST run the coverage evaluation step (DEVELOPME
 - **BLOCKED** — needs human input (write to INBOX.md)
 ```
 
-- [ ] **Step 4: Verify the file parses as markdown and reads coherently**
+- [ ] **Step 4: Replace the `## Run Workspace` section**
 
-Run: `cat templates/orchestra-CLAUDE.md | head -80`
+The current section (around line 5-11) lists only `tasks.md` and `log.md`. With the new model the run folder has four files. Replace the existing section with:
 
-Expected: Governance and Exit Signals sections show the new content; surrounding sections (Run Workspace, Session Grouping, Task Input, Worktree + Branching Model, Conventions) are unchanged.
+```markdown
+## Run Workspace
 
-- [ ] **Step 5: Commit**
+Each orchestra run gets a single folder at `.orchestra/sessions/run-<timestamp>/` (the orchestrator creates it and pre-seeds skeletons before your session starts). Inside:
+- `tasks.md` — assigned T-numbers (one row per `TASKS=` entry, pre-seeded with `source: main:T<n>`) plus a Discovered section
+- `decisions.md` — proposed decisions in main `DECISIONS.md` format, session-local D-numbers
+- `changelog.md` — proposed changelog entries, session-local C-numbers
+- `log.md` — free-form session notes, findings, parked issues
+
+Append across sessions in the same run; do not overwrite. The orchestrator also writes session JSON logs into this folder.
+```
+
+- [ ] **Step 5: Replace the `## Task Input` section**
+
+The current section (around line 17-19) ends with "If a task has a genuine blocker, mark it BLOCKED in TODO.md with a reason and move to the next task" — that violates the new rule. Replace the whole section with:
+
+```markdown
+## Task Input
+
+Read T-numbers from `.orchestra/config` `TASKS` field. The orchestrator has already pre-seeded the session `tasks.md` with one entry per T-number (status OPEN, `source: main:T<n>`). Update those entries as you work — do NOT modify main `TODO.md`. If a task has a genuine blocker you cannot resolve, set its session-local status to BLOCKED in `tasks.md` with a reason, write the same reason to INBOX.md, and move to the next task.
+```
+
+- [ ] **Step 6: Verify the file parses as markdown and reads coherently**
+
+Run: `cat templates/orchestra-CLAUDE.md`
+
+Expected: Run Workspace, Task Input, Governance, and Exit Signals sections all show the new content. Surrounding sections (Session Grouping, Worktree + Branching Model, Conventions) are unchanged. No remaining mentions of writing to main `TODO.md`/`DECISIONS.md`/`CHANGELOG.md` during a run.
+
+Quick check: `grep -n "TODO.md\|DECISIONS.md\|CHANGELOG.md" templates/orchestra-CLAUDE.md` should return no lines that instruct *writing* to those files (read-for-context references are fine if any remain).
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add templates/orchestra-CLAUDE.md
@@ -161,13 +189,13 @@ git commit -m "feat(templates): split governance steps by mode, add W4.5 coverag
 ## Task 3: Pre-create session governance skeletons in `orchestrator.sh`
 
 **Files:**
-- Modify: `bin/orchestrator.sh:540-547` (the run workspace creation block)
+- Modify: `bin/orchestrator.sh:541-546` (the run workspace creation block)
 
-**Goal:** When the orchestrator creates `.orchestra/sessions/run-<ts>/`, it currently only creates the directory. It should also pre-create empty `decisions.md`, `changelog.md`, `log.md` skeletons and a pre-populated `tasks.md` with one entry per assigned T-number.
+**Goal:** When the orchestrator creates `.orchestra/sessions/run-<ts>/`, it currently only creates the directory. It should also pre-create empty `decisions.md`, `changelog.md`, `log.md` skeletons and a pre-populated `tasks.md` with one entry per assigned T-number — and **commit them on the session branch immediately** so they survive `reset_worktree` between sessions (which runs `git reset --hard` + `git clean -fd`).
 
 - [ ] **Step 1: Read the current run-workspace creation block**
 
-Run: `sed -n '540,550p' bin/orchestrator.sh`
+Run: `sed -n '538,548p' bin/orchestrator.sh`
 
 Expected current content:
 
@@ -248,6 +276,19 @@ if [ ! -f "$RUN_WORKSPACE/log.md" ]; then
 fi
 
 notify "   Run workspace: .orchestra/sessions/$RUN_NAME (tasks/decisions/changelog/log seeded)"
+
+# Commit skeletons on the session branch immediately so reset_worktree
+# (git reset --hard + git clean -fd, run between sessions) cannot wipe
+# them. Use --no-verify to bypass any project commit hooks since this is
+# orchestra-owned bookkeeping, not user code.
+(
+    cd "$WORKTREE_DIR"
+    git add ".orchestra/sessions/$RUN_NAME"
+    if ! git diff --cached --quiet; then
+        git commit -m "chore(orchestra): seed session governance for $RUN_NAME" --no-verify >/dev/null 2>&1 || \
+            notify "   WARNING: could not commit session skeletons (continuing)"
+    fi
+)
 ```
 
 - [ ] **Step 3: Bash syntax check**
@@ -256,43 +297,17 @@ Run: `bash -n bin/orchestrator.sh && echo "syntax OK"`
 
 Expected: `syntax OK`
 
-- [ ] **Step 4: Smoke-test the skeleton creation in isolation**
+- [ ] **Step 4: Verify by running `orchestra test`**
 
-Create a quick standalone test:
+The integration test (Task 8) exercises the full skeleton-creation path end-to-end. No isolated bash unit test is added here — `bin/orchestra test` is the load-bearing verification mechanism for orchestrator changes in this codebase.
 
-```bash
-mkdir -p /tmp/orch-skel-test/.orchestra/sessions/run-test
-cat > /tmp/orch-skel-test/test.sh <<'EOF'
-#!/bin/bash
-set -e
-RUN_NAME="run-test"
-RUN_WORKSPACE="/tmp/orch-skel-test/.orchestra/sessions/$RUN_NAME"
-TASKS="T100,T101,T102"
-mkdir -p "$RUN_WORKSPACE"
-
-# Paste the same skeleton-creation block from orchestrator.sh here:
-# (For the test, copy lines from your edited orchestrator.sh starting at the
-# "# Skeleton governance files" comment through the closing fi of log.md.)
-EOF
-```
-
-Then paste the skeleton block (copied from the edited orchestrator.sh) into the test script after the `mkdir` line. Run:
-
-```bash
-bash /tmp/orch-skel-test/test.sh
-ls /tmp/orch-skel-test/.orchestra/sessions/run-test/
-cat /tmp/orch-skel-test/.orchestra/sessions/run-test/tasks.md
-```
-
-Expected: four files (`tasks.md`, `decisions.md`, `changelog.md`, `log.md`); `tasks.md` shows three Assigned entries `T1: OPEN (source: main:T100)` through `T3: OPEN (source: main:T102)`.
-
-Cleanup: `rm -rf /tmp/orch-skel-test`
+After the next task is complete you'll run `orchestra test` and confirm that the run workspace contains the four skeleton files. Defer the verification to that point.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add bin/orchestrator.sh
-git commit -m "feat(orchestrator): pre-create session governance skeletons"
+git commit -m "feat(orchestrator): pre-create + commit session governance skeletons"
 ```
 
 ---
@@ -306,11 +321,34 @@ git commit -m "feat(orchestrator): pre-create session governance skeletons"
 
 - [ ] **Step 1: Locate the TASK EXECUTION block in the heredoc**
 
-Run: `sed -n '311,355p' bin/orchestrator.sh`
+Run: `sed -n '311,360p' bin/orchestrator.sh`
 
-You'll see the section starting with `TASK EXECUTION` and ending with the `Between tasks (protocol step 20)` block.
+You'll see the section starting with `TASK EXECUTION` and ending with the `Between tasks (protocol step 20)` block. Note: items 1, 2, 3, and 4 all need updates — the existing items 1 and 3 contain instructions to write to main `TODO.md` that conflict with the new protocol.
 
-- [ ] **Step 2: Replace the existing item 2 (Run workspace) and add a new item about governance**
+- [ ] **Step 2: Update item 1's bullet list to remove main-TODO writes**
+
+Item 1 currently contains the bullets:
+
+```
+   - All checkpoint gates auto-accept.
+   - Decisions are logged as PROPOSED (human ratifies later).
+   - New tasks discovered are logged as PROPOSED in TODO.md.
+   - Commits go on a task branch, never on main.
+```
+
+Replace those four bullets with:
+
+```
+   - All checkpoint gates auto-accept.
+   - Decisions are logged as PROPOSED in this run's session decisions.md
+     (session-local D-numbers; the merger promotes them to main later).
+   - New tasks discovered are logged as PROPOSED in this run's session
+     tasks.md under the "Discovered" section (session-local T-numbers,
+     no source: field).
+   - Commits go on a task branch, never on main.
+```
+
+- [ ] **Step 3: Replace the existing item 2 (Run workspace) with the new governance description**
 
 The current item 2 reads:
 
@@ -341,7 +379,25 @@ Replace it with:
    session entries to main after the human triggers it.
 ```
 
-- [ ] **Step 3: Update the "Between tasks" block to reference W4.5**
+- [ ] **Step 4: Replace item 3 (BLOCKED instruction) to use session tasks.md**
+
+Item 3 currently reads:
+
+```
+3. If a task has a genuine blocker you cannot resolve autonomously, mark it
+   BLOCKED in TODO.md with a reason and move to the next task.
+```
+
+Replace with:
+
+```
+3. If a task has a genuine blocker you cannot resolve autonomously, set
+   the session-local task's status to BLOCKED in tasks.md (the row whose
+   source: matches this T-number), write the same reason to INBOX.md,
+   and move to the next task. Do NOT modify main TODO.md.
+```
+
+- [ ] **Step 5: Update the "Between tasks" block to reference W4.5**
 
 The current block (item 4 in TASK EXECUTION) reads:
 
@@ -367,21 +423,22 @@ Add a sub-bullet:
       Downgrade any over-claimed status to IN_PROGRESS or BLOCKED.
 ```
 
-- [ ] **Step 4: Bash syntax check** (the heredoc must remain valid)
+- [ ] **Step 6: Bash syntax check** (the heredoc must remain valid)
 
 Run: `bash -n bin/orchestrator.sh && echo "syntax OK"`
 
-- [ ] **Step 5: Sanity-check the rendered prompt** (placeholders should still expand)
+- [ ] **Step 7: Sanity-check the rendered prompt** (placeholders should still expand AND no remaining "TODO.md" write instructions)
 
 Run:
 
 ```bash
 grep -E "__RUN_NAME__|__STATE_DIR__|__SESSION_BRANCH__|__ORCH_CONFIG__" bin/orchestrator.sh | head
+sed -n '275,380p' bin/orchestrator.sh | grep -nE "TODO\.md|DECISIONS\.md|CHANGELOG\.md"
 ```
 
-Expected: the placeholders still appear in the heredoc (so the existing substitution code keeps working).
+Expected: placeholders still appear in the heredoc. The second grep should show no lines instructing Claude to *write* to main governance files (read-for-context references like step 6 of SESSION SETUP are fine).
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add bin/orchestrator.sh
@@ -435,7 +492,8 @@ is_main_task_complete() {
         return 1
     fi
 
-    grep -Eq "^- T[0-9]+: COMPLETE \(source: main:${main_tn}\)" "$tasks_file"
+    # Whitespace-tolerant: accept extra spaces between status, "(source:", and main:T<n>.
+    grep -Eq "^- T[0-9]+:[[:space:]]+COMPLETE[[:space:]]+\(source:[[:space:]]*main:${main_tn}\)" "$tasks_file"
 }
 ```
 
@@ -592,7 +650,8 @@ is_main_task_complete() {
     if [ ! -f "$tasks_file" ]; then
         return 1
     fi
-    grep -Eq "^- T[0-9]+: COMPLETE \(source: main:${main_tn}\)" "$tasks_file"
+    # Whitespace-tolerant: accept extra spaces between status, "(source:", and main:T<n>.
+    grep -Eq "^- T[0-9]+:[[:space:]]+COMPLETE[[:space:]]+\(source:[[:space:]]*main:${main_tn}\)" "$tasks_file"
 }
 
 # Assertions
@@ -861,18 +920,54 @@ git commit -m "feat(install): include MERGE-PROTOCOL.md in scaffolded .orchestra
 ## Task 8: Update test fixtures and `cmd_test` for the new model
 
 **Files:**
+- Modify: `templates/test/TODO/TODO.md` (CRITICAL — current text instructs Claude to write to main TODO/CHANGELOG, which violates the new protocol)
 - Modify: `bin/orchestra` (`cmd_test` function, around lines 479-607)
-- Inspect (and possibly modify): `templates/test/TODO/TODO.md`, `templates/test/HANDOVER.md`, `templates/test/INBOX.md`
+- Inspect: `templates/test/HANDOVER.md`, `templates/test/INBOX.md` (probably no changes needed)
 
-**Goal:** The `orchestra test` integration test currently checks main `TODO.md` statuses to verify success. Switch it to check the run's `tasks.md`. Verify main governance is untouched after the test.
+**Goal:** The current test fixture explicitly tells Claude to mark COMPLETE in `templates/test/TODO/TODO.md` and write to `templates/test/Changelog/CHANGELOG.md`. With the new protocol, both writes belong in the session folder instead. We rewrite the fixture's "Detail" and "AC" bullets accordingly, and switch `cmd_test`'s verification from "did main TODO.md change" to "did session tasks.md show COMPLETE AND main TODO.md is untouched".
 
-- [ ] **Step 1: Read the current test verification block**
+- [ ] **Step 1: Rewrite `templates/test/TODO/TODO.md` to match the new protocol**
+
+The current file contains instructions like "mark this task COMPLETE in this TODO file and write a C-entry in `.orchestra/test/Changelog/CHANGELOG.md`". Those AC bullets become impossible to satisfy under the new protocol. Replace the whole file with:
+
+```markdown
+# TODO (test)
+
+Test governance file for orchestra integration test. This file is committed
+to the repo and reset before each test run. Under the session-scoped
+governance protocol, sessions do NOT write to this file — they write to the
+run workspace's tasks.md and changelog.md instead.
+
+### T9998 — Orchestra integration test task 1
+
+- **Module:** Test
+- **Status:** `[ ]` OPEN
+- **Detail:** Append the line `# Test session 1: <UTC timestamp>` to `.orchestra/test/test-artifacts.md` (create the file if it doesn't exist). Mark the corresponding session-local task COMPLETE in the run workspace's `tasks.md` (the row whose `source:` field references `main:T9998`) and add a C-entry to the run workspace's `changelog.md` (session-local C-number).
+- **AC:**
+  - [ ] File `.orchestra/test/test-artifacts.md` contains the session 1 marker line
+  - [ ] Session `tasks.md` row for `source: main:T9998` is COMPLETE
+  - [ ] Session `changelog.md` contains a C-entry for this work
+
+### T9999 — Orchestra integration test task 2
+
+- **Module:** Test
+- **Status:** `[ ]` OPEN
+- **Detail:** Append the line `# Test session 2: <UTC timestamp>` to `.orchestra/test/test-artifacts.md`. The file should already exist from T9998 — if it doesn't, the session-branch accumulation failed and you should flag BLOCKED. Mark the corresponding session-local task COMPLETE in the run workspace's `tasks.md` and add a C-entry to `changelog.md`.
+- **AC:**
+  - [ ] File `.orchestra/test/test-artifacts.md` contains BOTH session markers
+  - [ ] Session `tasks.md` row for `source: main:T9999` is COMPLETE
+  - [ ] Session `changelog.md` contains a C-entry for this work
+
+<!-- Next number: T10000 -->
+```
+
+- [ ] **Step 2: Read the current test verification block**
 
 Run: `sed -n '536,572p' bin/orchestra`
 
 You'll see the "Report state" block that greps the test TODO.md for status.
 
-- [ ] **Step 2: Identify the run workspace path the test should check**
+- [ ] **Step 3: Identify the run workspace path the test should check**
 
 The test's run workspace is at `<WORKTREE_BASE>/run-<timestamp>/.orchestra/sessions/run-<timestamp>/tasks.md`. The test's `WORKTREE_BASE` is `/tmp/orchestra-test/` per `templates/config.test`. The exact run name is timestamp-based and known after the run.
 
@@ -883,7 +978,7 @@ local latest_workspace
 latest_workspace=$(find /tmp/orchestra-test -type d -name "run-*" -path "*/.orchestra/sessions/*" 2>/dev/null | sort | tail -1)
 ```
 
-- [ ] **Step 3: Replace the `# ─── Report state ───` block**
+- [ ] **Step 4: Replace the `# ─── Report state ───` block**
 
 Find:
 
@@ -956,25 +1051,25 @@ Replace with:
     echo ""
 ```
 
-- [ ] **Step 4: Bash syntax check**
+- [ ] **Step 5: Bash syntax check**
 
 ```bash
 bash -n bin/orchestra && echo "syntax OK"
 ```
 
-- [ ] **Step 5: Inspect the test fixtures to make sure they don't conflict with the new model**
+- [ ] **Step 6: Sanity-check that other test fixtures don't carry stale "write to main" instructions**
 
 Run:
 
 ```bash
-cat templates/test/TODO/TODO.md
 cat templates/test/HANDOVER.md
 cat templates/test/INBOX.md
+grep -E "TODO\.md|DECISIONS\.md|CHANGELOG\.md" templates/test/HANDOVER.md templates/test/INBOX.md 2>/dev/null
 ```
 
-The fixtures should still describe T9998 and T9999 as the assigned tasks (those flow through `.orchestra/config.test TASKS=T9998,T9999`). No content change is needed in the fixtures themselves — the change is in how the orchestrator and test verify completion.
+Expected: HANDOVER.md and INBOX.md don't tell Claude to write to main governance files. If either does, edit it to use session-folder paths the same way Step 1 did for TODO.md.
 
-- [ ] **Step 6: Run the integration test end-to-end**
+- [ ] **Step 7: Run the integration test end-to-end**
 
 Run: `cd /home/james/projects/claude-orchestra && bash bin/orchestra test`
 
@@ -982,16 +1077,16 @@ This will spawn a real orchestra run in a tmux session. Watch with `tmux attach 
 
 Expected at the end:
 - "Session tasks.md (in run workspace):" lists `T1: COMPLETE (source: main:T9998)` and `T2: COMPLETE (source: main:T9999)`
-- "Main test TODO.md (should be unchanged from committed state): ✓ unchanged"
+- "Main test TODO.md (should be unchanged from committed state): ✓ unchanged (governance rule honoured)"
 - Orchestrator exited with `All assigned tasks completed`
 
 If the run loops or fails: inspect `tmux attach -t orchestra-test` output, the run workspace at `/tmp/orchestra-test/run-*/.orchestra/sessions/run-*/`, and recent commits on the session branch.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add bin/orchestra
-git commit -m "test(orchestra): verify session tasks.md and main TODO untouched"
+git add bin/orchestra templates/test/TODO/TODO.md
+git commit -m "test(orchestra): rewrite fixtures + cmd_test for session-local model"
 ```
 
 ---
@@ -1038,19 +1133,20 @@ This is a separate task and explicitly out of scope for the canonical implementa
 
 | Spec component | Implemented in |
 |---|---|
-| Session writes only to session-local files | Tasks 1, 4 (templates), Task 3 (skeleton creation) |
-| `decisions.md` and `changelog.md` mirror main shapes | Task 3 (skeleton headers), Task 1 (instructions) |
-| Session-local numbering (T1, T2, ...; D1, D2, ...; C1, C2, ...) | Task 1, Task 4 (Claude instructions), Task 3 (skeleton) |
-| `source: main:T<n>` field on assigned tasks | Task 3 (skeleton), Task 1, Task 4 (Claude instructions), Task 5 (matched in completion check) |
-| Discovered tasks have no `source:` field | Task 1 (Claude instructions), Task 3 (skeleton's "Discovered" section) |
-| Main governance read-only during run | Task 1, Task 4 (Claude instructions). Test 8 verifies. |
-| Layer A coverage evaluation (W4.5) | Task 2 (DEVELOPMENT-PROTOCOL.md), Task 4 (prompt reminder) |
-| Layer B mechanical check reads tasks.md | Task 5 (`is_main_task_complete`) |
+| Session writes only to session-local files | Task 1 (Steps 2-5: Governance, Run Workspace, Task Input, Exit Signals); Task 4 (Steps 2-4: prompt items 1-3); Task 3 (skeleton creation) |
+| `decisions.md` and `changelog.md` mirror main shapes | Task 3 (skeleton headers); Task 1 (instructions) |
+| Session-local numbering (T1, T2, ...; D1, D2, ...; C1, C2, ...) | Task 1 Step 2; Task 4 Steps 2-3; Task 3 (skeleton) |
+| `source: main:T<n>` field on assigned tasks | Task 3 (skeleton); Task 1 Step 2; Task 4 Step 4; Task 5 Step 1 (matched in completion check) |
+| Discovered tasks have no `source:` field | Task 1 Step 2 (Claude instructions); Task 3 (skeleton's "Discovered" section) |
+| Main governance read-only during run | Task 1 (all relevant sections); Task 4 (entire prompt rewrite); Task 8 Step 7 verifies via `git diff --quiet` |
+| Layer A coverage evaluation (W4.5) | Task 2 Step 3 (DEVELOPMENT-PROTOCOL.md row); Task 4 Step 5 (prompt reminder) |
+| Layer B mechanical check reads tasks.md | Task 5 Step 1 (`is_main_task_complete`); Steps 2-4 wire it into the three completion checks |
+| Skeleton survival across `reset_worktree` | Task 3 Step 2 (committed immediately on session branch with `--no-verify`) |
 | Merge protocol document | Task 6 |
 | Merge protocol installed by both bootstrap paths | Task 7 |
-| Test fixtures + cmd_test exercise new model | Task 8 |
-| Idempotency marker `## Ingested` in log.md | Task 6 (Step 7 of merge protocol) |
-| Bug regression: orchestra completion loop | Task 5 (root fix) + Task 8 (regression test) |
+| Test fixtures + cmd_test exercise new model | Task 8 Step 1 (fixture rewrite) + Step 4 (cmd_test rewrite) + Step 7 (end-to-end) |
+| Idempotency marker `## Ingested` in log.md | Task 6 (Step 7 of merge protocol prose) — not exercised by automated test (acceptable: merge is human-driven) |
+| Bug regression: orchestra completion loop | Task 5 Step 1 (root fix) + Task 8 Step 7 (regression test asserts COMPLETE detected and main untouched) |
 
 No gaps.
 
