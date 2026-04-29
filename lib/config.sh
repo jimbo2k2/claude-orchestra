@@ -1,110 +1,204 @@
 #!/bin/bash
-# config.sh — Read .orchestra/config and export governance paths
+# CONFIG.md parser — extracts KEY: VALUE bullets from markdown.
+# Spec: docs/superpowers/specs/2026-04-29-orchestra-cleanup-design.md Section 10.
+# Values are stored verbatim in ORCHESTRA_CONFIG associative array; never eval'd.
 #
-# Source this file from orchestrator.sh and hook scripts.
-# Usage: source "$PROJECT_DIR/.orchestra/lib/config.sh" && load_orchestra_config "$PROJECT_DIR"
+# Usage:
+#   declare -gA ORCHESTRA_CONFIG
+#   parse_config_md /path/to/CONFIG.md   # populate from markdown bullets
+#   apply_config_defaults                # fill in defaults for optional keys
+#   validate_config                      # type/range/enum/pattern checks
+#
+# Why bash regex + literal storage (no eval/source): the threat model is
+# "user typo" not "untrusted input", but values still must be treated as
+# opaque strings so a stray backtick or $() in the markdown can't ever
+# execute. Loud-fail validation runs before any session starts.
 
-load_orchestra_config() {
-    local project_dir="$1"
-    # Allow test harness to override the config file via ORCHESTRA_CONFIG env var
-    local config_file="${ORCHESTRA_CONFIG:-$project_dir/.orchestra/config}"
-
-    if [ ! -f "$config_file" ]; then
-        echo "ERROR: config file not found: $config_file" >&2
+# Parse markdown bullet lines of the form `- \`KEY\`: VALUE` into ORCHESTRA_CONFIG.
+# Caller MUST `declare -gA ORCHESTRA_CONFIG` before calling.
+# Errors abort with non-zero exit and a message to stderr.
+parse_config_md() {
+    local file="$1"
+    if [ ! -f "$file" ]; then
+        echo "ERROR: config file not found: $file" >&2
         return 1
     fi
 
-    # Source the config (key=value format)
-    set -a
-    source "$config_file"
-    set +a
+    local line
+    local key
+    local value
+    local -A seen=()
+    local re='^[[:space:]]*-[[:space:]]+`([A-Z_][A-Z0-9_]*)`:[[:space:]]*(.+)$'
 
-    # Resolve relative paths against project dir
-    TODO_FILE="${project_dir}/${TODO_FILE}"
-    DECISIONS_FILE="${project_dir}/${DECISIONS_FILE}"
-    CHANGELOG_FILE="${project_dir}/${CHANGELOG_FILE}"
-    TOOLCHAIN_FILE="${project_dir}/${TOOLCHAIN_FILE:-.orchestra/toolchain.md}"
-    DEVELOPMENT_PROTOCOL="${project_dir}/${DEVELOPMENT_PROTOCOL:-DEVELOPMENT-PROTOCOL.md}"
-    # If config sets STATE_DIR (e.g. test mode), resolve it as absolute path
-    if [ -n "${STATE_DIR:-}" ] && [ "${STATE_DIR:0:1}" != "/" ]; then
-        STATE_DIR="${project_dir}/${STATE_DIR}"
-    fi
+    while IFS= read -r line || [ -n "$line" ]; do
+        if [[ "$line" =~ $re ]]; then
+            key="${BASH_REMATCH[1]}"
+            value="${BASH_REMATCH[2]}"
+            # Trim trailing whitespace (leading already consumed by regex).
+            value="${value%"${value##*[![:space:]]}"}"
+
+            if [ -n "${seen[$key]:-}" ]; then
+                echo "ERROR: duplicate key '$key' in $file" >&2
+                return 1
+            fi
+            seen[$key]=1
+            ORCHESTRA_CONFIG[$key]="$value"
+        fi
+    done < "$file"
+
+    return 0
 }
 
-# Pre-flight validation: check all required config fields and files exist
-preflight_check() {
-    local errors=0
+# Apply defaults for optional keys (call after parse, before validate).
+# Uses :=, so only keys not already set are filled in.
+apply_config_defaults() {
+    : "${ORCHESTRA_CONFIG[MAX_HANG_SECONDS]:=1200}"
+    : "${ORCHESTRA_CONFIG[EFFORT]:=high}"
+    : "${ORCHESTRA_CONFIG[TMUX_PREFIX]:=orchestra}"
+    : "${ORCHESTRA_CONFIG[QUOTA_PACING]:=true}"
+    : "${ORCHESTRA_CONFIG[QUOTA_THRESHOLD]:=80}"
+    : "${ORCHESTRA_CONFIG[QUOTA_POLL_INTERVAL]:=120}"
+    : "${ORCHESTRA_CONFIG[COOLDOWN_SECONDS]:=15}"
+    : "${ORCHESTRA_CONFIG[CRASH_COOLDOWN_SECONDS]:=30}"
+    : "${ORCHESTRA_CONFIG[SMOKE_TEST_TIMEOUT]:=900}"
+}
 
-    if [ -z "${TASKS:-}" ]; then
-        echo "ERROR: No tasks assigned. Set TASKS=T315,T325,... in .orchestra/config" >&2
-        errors=$((errors + 1))
-    fi
-
-    if [ -z "${TMUX_SESSION:-}" ]; then
-        echo "ERROR: TMUX_SESSION not set in .orchestra/config" >&2
-        errors=$((errors + 1))
-    fi
-
-    if [ ! -f "${DEVELOPMENT_PROTOCOL:-}" ]; then
-        echo "ERROR: Development protocol not found at ${DEVELOPMENT_PROTOCOL:-DEVELOPMENT-PROTOCOL.md}" >&2
-        errors=$((errors + 1))
-    fi
-
-    if [ ! -f "$TOOLCHAIN_FILE" ] || [ ! -s "$TOOLCHAIN_FILE" ]; then
-        echo "ERROR: Toolchain not configured. Write build/test commands to $TOOLCHAIN_FILE" >&2
-        errors=$((errors + 1))
-    fi
-
-    for label in TODO DECISIONS CHANGELOG; do
-        local var_name="${label}_FILE"
-        local file_path="${!var_name}"
-        if [ ! -f "$file_path" ]; then
-            echo "ERROR: Governance file not found: $file_path" >&2
-            errors=$((errors + 1))
+# Validate ORCHESTRA_CONFIG has required keys and all values pass type/range
+# checks per spec Section 10. Returns non-zero on first failure with a
+# message on stderr.
+validate_config() {
+    local required=(MAX_SESSIONS MAX_CONSECUTIVE_CRASHES MODEL WORKTREE_BASE BASE_BRANCH)
+    local key
+    for key in "${required[@]}"; do
+        if [ -z "${ORCHESTRA_CONFIG[$key]:-}" ]; then
+            echo "ERROR: required config key '$key' is missing" >&2
+            return 1
         fi
     done
 
-    # Verify each T-number in TASKS exists in TODO file
-    IFS=',' read -ra task_list <<< "$TASKS"
-    for tnumber in "${task_list[@]}"; do
-        tnumber=$(echo "$tnumber" | xargs)  # trim whitespace
-        if ! grep -q "### $tnumber" "$TODO_FILE" 2>/dev/null; then
-            echo "WARNING: $tnumber not found in $TODO_FILE — check the task number" >&2
-        fi
-    done
+    # Type / range / enum / pattern checks per spec table.
+    _check_int_min   MAX_SESSIONS            1   || return 1
+    _check_int_min   MAX_CONSECUTIVE_CRASHES 1   || return 1
+    _check_int_min   MAX_HANG_SECONDS        60  || return 1
+    _check_enum      MODEL  opus sonnet haiku    || return 1
+    _check_enum      EFFORT low  medium  high    || return 1
+    _check_abspath   WORKTREE_BASE                || return 1
+    _check_nonempty  BASE_BRANCH                  || return 1
+    _check_pattern   TMUX_PREFIX '^[a-z][a-z0-9-]*$' || return 1
+    _check_bool      QUOTA_PACING                 || return 1
+    _check_int_range QUOTA_THRESHOLD 1 100        || return 1
+    _check_int_min   QUOTA_POLL_INTERVAL    30   || return 1
+    _check_int_min   COOLDOWN_SECONDS       0    || return 1
+    _check_int_min   CRASH_COOLDOWN_SECONDS 0    || return 1
+    _check_int_min   SMOKE_TEST_TIMEOUT     60   || return 1
 
-    return "$errors"
+    return 0
 }
 
-# Validate that tools listed in toolchain.md's ## Prerequisites section are installed.
-validate_toolchain_prereqs() {
-    local toolchain="$TOOLCHAIN_FILE"
-    local in_prereqs=false
-    local errors=0
+# --- internal validation helpers ---
+# Each helper:
+#   - Skips silently if the key is unset (so optional keys without defaults are OK).
+#   - Returns 0 on pass, 1 on fail, with an explanatory message on stderr.
 
-    if [ ! -f "$toolchain" ]; then
+_check_int_min() {
+    local key="$1"
+    local min="$2"
+    local value="${ORCHESTRA_CONFIG[$key]:-}"
+    if [ -z "$value" ]; then
         return 0
     fi
+    if ! [[ "$value" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: config key '$key'='$value' must be a non-negative integer" >&2
+        return 1
+    fi
+    if [ "$value" -lt "$min" ]; then
+        echo "ERROR: config key '$key'=$value must be >= $min" >&2
+        return 1
+    fi
+    return 0
+}
 
-    while IFS= read -r line; do
-        if [[ "$line" =~ ^##[[:space:]]+Prerequisites ]]; then
-            in_prereqs=true
-            continue
-        fi
-        if $in_prereqs && [[ "$line" =~ ^## ]]; then
-            break
-        fi
-        if $in_prereqs && [[ "$line" =~ ^-[[:space:]]+([a-zA-Z0-9_-]+) ]]; then
-            local tool="${BASH_REMATCH[1]}"
-            if ! command -v "$tool" &>/dev/null; then
-                echo "ERROR: Toolchain prerequisite '$tool' not found. See $toolchain" >&2
-                errors=$((errors + 1))
-            fi
-        fi
-    done < "$toolchain"
+_check_int_range() {
+    local key="$1"
+    local lo="$2"
+    local hi="$3"
+    local value="${ORCHESTRA_CONFIG[$key]:-}"
+    if [ -z "$value" ]; then
+        return 0
+    fi
+    if ! [[ "$value" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: config key '$key'='$value' must be a non-negative integer" >&2
+        return 1
+    fi
+    if [ "$value" -lt "$lo" ] || [ "$value" -gt "$hi" ]; then
+        echo "ERROR: config key '$key'=$value must be in [$lo,$hi]" >&2
+        return 1
+    fi
+    return 0
+}
 
-    if [ "$errors" -gt 0 ]; then
-        echo "HINT: Install missing prerequisites before running orchestra." >&2
+_check_enum() {
+    local key="$1"
+    shift
+    local value="${ORCHESTRA_CONFIG[$key]:-}"
+    if [ -z "$value" ]; then
+        return 0
+    fi
+    local option
+    for option in "$@"; do
+        if [ "$value" = "$option" ]; then
+            return 0
+        fi
+    done
+    echo "ERROR: config key '$key'='$value' must be one of: $*" >&2
+    return 1
+}
+
+_check_abspath() {
+    local key="$1"
+    local value="${ORCHESTRA_CONFIG[$key]:-}"
+    if [ -z "$value" ]; then
+        return 0
+    fi
+    if [[ "$value" != /* ]]; then
+        echo "ERROR: config key '$key'='$value' must be an absolute path" >&2
+        return 1
+    fi
+    return 0
+}
+
+_check_nonempty() {
+    local key="$1"
+    local value="${ORCHESTRA_CONFIG[$key]:-}"
+    if [ -z "$value" ]; then
+        echo "ERROR: config key '$key' must not be empty" >&2
+        return 1
+    fi
+    return 0
+}
+
+_check_pattern() {
+    local key="$1"
+    local pattern="$2"
+    local value="${ORCHESTRA_CONFIG[$key]:-}"
+    if [ -z "$value" ]; then
+        return 0
+    fi
+    if ! [[ "$value" =~ $pattern ]]; then
+        echo "ERROR: config key '$key'='$value' must match pattern $pattern" >&2
+        return 1
+    fi
+    return 0
+}
+
+_check_bool() {
+    local key="$1"
+    local value="${ORCHESTRA_CONFIG[$key]:-}"
+    if [ -z "$value" ]; then
+        return 0
+    fi
+    if [ "$value" != "true" ] && [ "$value" != "false" ]; then
+        echo "ERROR: config key '$key'='$value' must be 'true' or 'false'" >&2
         return 1
     fi
     return 0
