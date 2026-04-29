@@ -480,7 +480,7 @@ Single canonical location at `examples/smoke-test/{empty,with-governance}/`. Rem
 
 No automated migration. Existing v3 installs (e.g. logrings) diverge enough that scripted migration would be more failure-prone than informed manual work.
 
-Instead: ship `MIGRATION.md` at the repo root containing a Claude-readable prompt. User invokes by saying something like "follow the orchestra migration prompt to migrate this project". Claude:
+Instead: ship `MIGRATION.md` at the **orchestra repo root only** (not installed into user projects — irrelevant for new installs and bloat for everyone else). When an existing v3 install needs upgrading, the user has the orchestra source locally anyway and points Claude at the file path: "follow the migration prompt at `<orchestra-repo>/MIGRATION.md` to migrate this project". The `.orchestra/CLAUDE.md` agent guidance (Section 9) tells interactive Claude sessions where to look. Claude:
 
 1. Reads the existing `.orchestra/` layout and the project's git state.
 2. Confirms with the user that no runs are currently in flight (worktrees clean, no live tmux orchestra sessions).
