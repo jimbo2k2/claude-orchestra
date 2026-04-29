@@ -162,6 +162,7 @@ cmd_run() {
     tmux new-session -d -s "$tmux_name" -c "$worktree_dir" \
         -e "RUN_DIR=$wt_run_dir" \
         -e "WORKTREE_DIR=$worktree_dir" \
+        -e "PROJECT_DIR=$project_dir" \
         -e "RUN_TS=$run_ts" \
         -e "RUN_BRANCH=$run_branch" \
         -e "BASE_BRANCH=$base_branch" \
@@ -481,13 +482,14 @@ cmd_reset() {
                 archived=$((archived + 1))
             done <<< "$active_runs"
 
-            # Remove stale wind-down lock if any. Path matches
-            # bin/orchestrator.sh's WINDDOWN_LOCK (under runs/, not directly
-            # under .orchestra/).
-            if [ -f "$wt/.orchestra/runs/.wind-down.lock" ]; then
-                rm -f "$wt/.orchestra/runs/.wind-down.lock"
-            fi
         done <<< "$worktrees"
+    fi
+
+    # Wind-down lock lives in the project tree (spec Section 7) — singular,
+    # serialises across worktrees. Remove if stale; orchestrator's own
+    # liveness/start-time check catches a still-running holder anyway.
+    if [ -f "$orch/runs/.wind-down.lock" ]; then
+        rm -f "$orch/runs/.wind-down.lock"
     fi
 
     # Clean up project-tree gate folders (only if empty — they're just gate dirs).

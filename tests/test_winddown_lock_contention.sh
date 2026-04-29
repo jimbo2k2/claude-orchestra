@@ -61,17 +61,19 @@ git -c user.email=t@t -c user.name=t commit -q -m "config"
 
 PATH="$TMP/fake-bin:$PATH" .orchestra/runtime/bin/orchestra run 2>&1
 
-# Wait for the lock file to appear (wind-down has spawned and held it)
+# Wait for the lock file to appear (wind-down has spawned and held it).
+# The lock now lives at the PROJECT tree (not per-worktree) so concurrent
+# runs serialise their pushes (spec Section 7).
 WORKTREE=""
+LOCK="$TMP/.orchestra/runs/.wind-down.lock"
 for _ in $(seq 1 30); do
     WORKTREE=$(ls -d "$TMP/wt"/run-* 2>/dev/null | head -1 || true)
-    if [ -n "$WORKTREE" ] && [ -f "$WORKTREE/.orchestra/runs/.wind-down.lock" ]; then
+    if [ -n "$WORKTREE" ] && [ -f "$LOCK" ]; then
         break
     fi
     sleep 0.5
 done
 
-LOCK="$WORKTREE/.orchestra/runs/.wind-down.lock"
 [ -f "$LOCK" ] || { echo "lock file never appeared"; exit 1; }
 
 # Inspect the lock while wind-down session is sleeping

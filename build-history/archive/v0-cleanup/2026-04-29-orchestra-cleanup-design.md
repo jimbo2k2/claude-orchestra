@@ -282,7 +282,9 @@ This file is orchestra-shipped. Edits by the user persist (init won't overwrite 
 
 No `.claude/settings.json` is created or required. No `hooks/` directory.
 
-**Headless invocation.** Orchestrator spawns each session via `claude --print --dangerously-skip-permissions --model <MODEL> --thinking-effort <EFFORT>` (consistent with the existing `bin/orchestrator.sh` invocation pattern). Orchestra does not install or require `.claude/settings.json` — `--dangerously-skip-permissions` is the only permission-bypass needed for headless work. The user's interactive Claude Code config (in `~/.claude/`) is irrelevant to autonomous runs.
+**Headless invocation.** Orchestrator spawns each session via `claude --print --dangerously-skip-permissions --model <MODEL> --effort <EFFORT>` (consistent with the existing `bin/orchestrator.sh` invocation pattern). Orchestra does not install or require `.claude/settings.json` — `--dangerously-skip-permissions` is the only permission-bypass needed for headless work. The user's interactive Claude Code config (in `~/.claude/`) is irrelevant to autonomous runs.
+
+> **Erratum (Phase 19):** earlier drafts of this spec named the flag `--thinking-effort`. The real Claude CLI flag is `--effort` (verified via `claude --print --help`); the code uses `--effort`, and this paragraph has been corrected to match. Phase 11's smoke test surfaced the discrepancy.
 
 User invokes via `.orchestra/runtime/bin/orchestra run`. README suggests an alias.
 

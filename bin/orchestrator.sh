@@ -16,6 +16,7 @@ set -euo pipefail
 
 : "${RUN_DIR:?RUN_DIR not set}"
 : "${WORKTREE_DIR:?WORKTREE_DIR not set}"
+: "${PROJECT_DIR:?PROJECT_DIR not set}"
 : "${RUN_TS:?RUN_TS not set}"
 : "${RUN_BRANCH:?RUN_BRANCH not set}"
 : "${BASE_BRANCH:?BASE_BRANCH not set}"
@@ -38,7 +39,11 @@ QUOTA_THRESHOLD="${ORCHESTRA_CONFIG[QUOTA_THRESHOLD]}"
 QUOTA_POLL_INTERVAL="${ORCHESTRA_CONFIG[QUOTA_POLL_INTERVAL]}"
 CREDENTIALS_FILE="${HOME}/.claude/.credentials.json"
 
-WINDDOWN_LOCK="$WORKTREE_DIR/.orchestra/runs/.wind-down.lock"
+# Spec Section 7: the wind-down lock lives in the PROJECT TREE, not per-
+# worktree, so concurrent runs (each in their own worktree) actually
+# serialise their pushes to origin/<BASE_BRANCH>. Per-worktree placement
+# would defeat the lock's purpose.
+WINDDOWN_LOCK="$PROJECT_DIR/.orchestra/runs/.wind-down.lock"
 
 # Spec Section 6.1: orchestrator-owned lock file. Line 1 is the holder PID,
 # line 2 is /proc/<pid>/stat field 22 (process start time in clock ticks).
