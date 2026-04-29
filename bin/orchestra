@@ -76,7 +76,91 @@ Done. Next steps:
   4. Run: .orchestra/runtime/bin/orchestra run
 EOF
 }
-cmd_run()    { die "run not yet implemented (Phase 4)"; }
+cmd_run() {
+    local project_dir
+    project_dir="$(git rev-parse --show-toplevel 2>/dev/null)" || die "Not in a git repository"
+    local orch="$project_dir/.orchestra"
+    [ -d "$orch" ] || die ".orchestra/ not found. Run 'orchestra init' first."
+
+    # Load + validate config (sourced from RUNTIME copy, not source-tree)
+    declare -gA ORCHESTRA_CONFIG
+    # shellcheck source=/dev/null
+    source "$orch/runtime/lib/config.sh"
+    parse_config_md "$orch/CONFIG.md" || die "CONFIG.md parse failed"
+    apply_config_defaults
+    validate_config || die "CONFIG.md validation failed"
+
+    local base_branch="${ORCHESTRA_CONFIG[BASE_BRANCH]}"
+    local worktree_base="${ORCHESTRA_CONFIG[WORKTREE_BASE]}"
+    local tmux_prefix="${ORCHESTRA_CONFIG[TMUX_PREFIX]}"
+
+    mkdir -p "$worktree_base"
+
+    # Atomic mkdir gate (spec Section 7) — retry up to 3x with fresh timestamp
+    local run_ts run_dir attempt=0
+    local run_folder_root="$orch/runs"
+    while [ $attempt -lt 3 ]; do
+        run_ts="$(date -u +%Y%m%d-%H%M%S)"
+        run_dir="$run_folder_root/$run_ts"
+        if mkdir "$run_dir" 2>/dev/null; then
+            break
+        fi
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+    [ $attempt -lt 3 ] || die "Could not allocate a unique run timestamp after 3 attempts"
+
+    local worktree_dir="$worktree_base/run-$run_ts"
+    local tmux_name="$tmux_prefix-$run_ts"
+    local run_branch="orchestra/run-$run_ts"
+
+    # Setup-cleanup trap — clears the run folder if anything below fails before
+    # the session loop is live (spec Section 7). ERR only — EXIT/INT/TERM are
+    # reserved for the wind-down lock trap (Section 6.1).
+    trap "rm -rf '$run_dir'" ERR
+
+    # Worktree creation
+    git -C "$project_dir" worktree add "$worktree_dir" -b "$run_branch" "$base_branch" \
+        || die "git worktree add failed"
+
+    # Preflight: OBJECTIVE.md must exist in the worktree (per spec Section 4)
+    [ -f "$worktree_dir/.orchestra/OBJECTIVE.md" ] \
+        || die "OBJECTIVE.md not found in worktree — commit it to $base_branch and retry."
+
+    # Build the run folder INSIDE the worktree (per spec Section 5)
+    local wt_run_dir="$worktree_dir/.orchestra/runs/$run_ts"
+    mkdir -p "$wt_run_dir/9-sessions"
+    cp "$worktree_dir/.orchestra/OBJECTIVE.md" "$wt_run_dir/2-OBJECTIVE.md"
+    : > "$wt_run_dir/1-INBOX.md"
+    : > "$wt_run_dir/3-TODO.md"
+    : > "$wt_run_dir/4-DECISIONS.md"
+    : > "$wt_run_dir/5-CHANGELOG.md"
+    : > "$wt_run_dir/6-HANDOVER.md"
+    : > "$wt_run_dir/7-SUMMARY.md"
+
+    # Tmux conflict check
+    if tmux has-session -t "$tmux_name" 2>/dev/null; then
+        die "tmux session '$tmux_name' already exists — kill it or wait"
+    fi
+
+    # Clear setup trap — past this point the run folder legitimately persists
+    trap - ERR
+
+    # Launch
+    echo "Starting orchestra run in tmux session '$tmux_name'..."
+    echo "  Worktree: $worktree_dir"
+    echo "  Run dir:  $wt_run_dir"
+    echo "  Attach:   tmux attach -t $tmux_name"
+
+    tmux new-session -d -s "$tmux_name" \
+        "cd '$worktree_dir' && \
+         RUN_DIR='$wt_run_dir' \
+         WORKTREE_DIR='$worktree_dir' \
+         RUN_TS='$run_ts' \
+         RUN_BRANCH='$run_branch' \
+         BASE_BRANCH='$base_branch' \
+         bash '$orch/runtime/bin/orchestrator.sh'"
+}
 cmd_status() { die "status not yet implemented (Phase 15)"; }
 cmd_test()   { die "test not yet implemented (Phase 11)"; }
 cmd_reset()  { die "reset not yet implemented (Phase 15)"; }
