@@ -44,6 +44,34 @@ Format: each item lists the **phase**, the **file:line** where applicable, and t
 
 ---
 
+## From Phase 3 — orchestra init
+
+- [ ] **`bin/orchestra` `for pair in ...` loop — explanatory comment.** The encoding `"<src>:<dst>"` is non-obvious. Add comment above the loop:
+  ```
+  # Each entry: "<template-filename>:<dest-filename>". Most are identity;
+  # orchestra-CLAUDE.md is renamed to CLAUDE.md so the source template
+  # filename doesn't collide with the project's own CLAUDE.md template.
+  ```
+
+- [ ] **`tests/test_cli_dispatch.sh` init branch — simpler form.** Current implementation rounds `out` through a fixed `/tmp/.orchestra_dispatch_out` filename in a subshell, which is mildly racy if two test runs ever overlap. Cleaner:
+  ```bash
+  if [ "$cmd" = "init" ]; then
+      TMP_DISPATCH=$(mktemp -d)
+      ( cd "$TMP_DISPATCH" && git init -q )
+      out=$("$REPO/bin/orchestra" init "$TMP_DISPATCH" 2>&1) || true
+      rm -rf "$TMP_DISPATCH"
+  else
+      out=$(./bin/orchestra "$cmd" 2>&1) || true
+  fi
+  ```
+  Uses `init`'s target-dir argument instead of `cd`+capture-via-tempfile. No fixed-name race risk.
+
+- [ ] **`templates/CONFIG.md:24` — `WORKTREE_BASE` placeholder hint.** Currently `/tmp/orchestra-myproject`. Optional: add inline comment or rename placeholder to `/tmp/orchestra-PROJECT_NAME` (uppercase shouts "replace me"). The next-steps echo already prompts to edit, so this is polish only.
+
+- [ ] **`templates/orchestra-CLAUDE.md` size review.** 55 lines is on the edge of bloat. Trim consideration: "Migration from old orchestra" section could be one line pointing at the source repo's MIGRATION.md. Current content is defensible (high info density, no fluff) — leave as-is unless a future review feels it's too long.
+
+---
+
 ## How to apply
 
 At Phase 19 (branch wrap-up):
