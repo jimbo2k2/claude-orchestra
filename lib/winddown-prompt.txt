@@ -1,28 +1,199 @@
-You are the wind-down session for orchestra run.
+You are the wind-down session for an orchestra run. The working sessions
+are complete; your job is to ingest the run's governance into the parent
+project's governance shape and merge the run-branch into the base branch.
 
-Run dir:    __RUN_DIR__
-Run branch: __RUN_BRANCH__
-Base:       __BASE_BRANCH__
+The contract below is binding. Follow it in order. Spec reference:
+docs/superpowers/specs/2026-04-29-orchestra-cleanup-design.md Section 6.3.
 
-This is the simple wind-down — for Phase 8 only, do only the merge sequence
-(Phase 12 adds ingestion):
+## Variables
 
-1. cd into the worktree (you are already there).
-2. git checkout __BASE_BRANCH__
-3. git pull origin __BASE_BRANCH__
-4. If __BASE_BRANCH__ is an ancestor of __RUN_BRANCH__:
-     git merge --ff-only __RUN_BRANCH__
-   Else:
-     git checkout __RUN_BRANCH__
-     git rebase __BASE_BRANCH__   (resolve conflicts inline if any)
-     git checkout __BASE_BRANCH__
-     git merge --ff-only __RUN_BRANCH__
-5. git push origin __BASE_BRANCH__
-   On rejection: re-pull, re-merge, retry up to 3 times. On 3rd rejection
-   or non-conflict push failure: emit BLOCKED with details in 6-HANDOVER.md.
+- Run dir:    __RUN_DIR__
+- Run branch: __RUN_BRANCH__
+- Base:       __BASE_BRANCH__
 
-If unresolvable conflict: emit BLOCKED with conflict details in 6-HANDOVER.md
-following the wind-down BLOCKED shape (files in conflict, git status excerpt,
-manual resolution instructions).
+You are running INSIDE the worktree that holds the run-branch checkout.
+`pwd` is already the worktree root.
 
-On success: print exactly "COMPLETE" as the final line.
+## MUST (in this exact order)
+
+### Step 1 — Discover parent governance shape
+
+1a. Read the parent project's `CLAUDE.md` hierarchy first (root `CLAUDE.md`
+    plus any `CLAUDE.md` files in immediate subdirectories that the root
+    references). If `CLAUDE.md` names governance file paths explicitly
+    (e.g. "decisions live in `docs/decisions/`"), prefer those paths.
+
+1b. Otherwise fall back to filename-pattern matching at TWO LEVELS ONLY:
+    project root and `docs/` top-level. Patterns (case-sensitive):
+      - TODO equivalents:      `TODO*` (e.g. TODO.md, TODOS.md, TODO-list.md)
+      - DECISIONS equivalents: `DECISIONS*` (e.g. DECISIONS.md, DECISION-LOG.md)
+      - CHANGELOG equivalents: `CHANGELOG*`, `HISTORY*`, `NEWS*`
+
+    Do NOT recurse deeper than `docs/`. Do NOT match files in `src/`,
+    `lib/`, `tests/`, etc.
+
+1c. Record the discovered mapping (or "skipped — no parent file found")
+    for each of TODO, DECISIONS, CHANGELOG in `__RUN_DIR__/7-SUMMARY.md`
+    under a new `## Wind-down` section. Use this format:
+
+    ```
+    ## Wind-down
+
+    ### Governance mapping
+    - 3-TODO.md      → <path or "(skipped — no parent TODO file found)">
+    - 4-DECISIONS.md → <path or "(skipped — no parent DECISIONS file found)">
+    - 5-CHANGELOG.md → <path or "(skipped — no parent CHANGELOG file found)">
+    ```
+
+### Step 2 — Ingest run governance into parent shape
+
+For EACH of the three run-file → parent-file pairs from Step 1c (skipping
+any pair where the parent file does not exist):
+
+2a. Read the run file at `__RUN_DIR__/<run-file>` (3-TODO.md, 4-DECISIONS.md,
+    or 5-CHANGELOG.md).
+
+2b. Read the existing parent file. Identify any potential semantic conflicts
+    between the new entries (in the run file) and existing entries (in the
+    parent file). A conflict is: same key/topic with contradictory status,
+    a decision reversal, a TODO that supersedes an earlier TODO, etc. Same
+    key/topic with NON-contradictory new info (e.g. additional commentary
+    on the same decision) is NOT a conflict.
+
+2c. Append the run file's new entries (NOT the heading; just the entries)
+    to the bottom of the parent file. Existing parent content MUST be
+    preserved verbatim — do NOT modify, reorder, or remove any existing
+    line. If the parent file documents an "insertion point" (e.g. a
+    comment like `<!-- new entries below -->`), insert there instead of
+    appending to the bottom.
+
+2d. Run `git add <parent-file> && git commit` with the EXACT message:
+
+    ```
+    wind-down: ingest <run-file> → <parent-file>
+    ```
+
+    Where `<run-file>` is the basename (e.g. `3-TODO.md`) and
+    `<parent-file>` is the relative path from the worktree root (e.g.
+    `TODO.md` or `docs/decisions/DECISIONS.md`). The commit message uses
+    a literal Unicode arrow `→` (U+2192).
+
+2e. After all three potential ingestions, append a "Potential governance
+    conflicts" subsection to the `## Wind-down` block of
+    `__RUN_DIR__/7-SUMMARY.md`. For each conflict found in 2b, use this
+    EXACT schema:
+
+    ```markdown
+    ### Potential governance conflicts
+
+    #### Conflict 1
+    - **Source:** `<run-file>:<entry-id-or-line>` — `<one-line summary of new entry>`
+    - **Target:** `<parent-file>:<entry-id-or-line>` — `<one-line summary of existing entry>`
+    - **Reading:** <1-3 sentences explaining the conflict>
+    - **Recommended resolution:** <supersede / merge / clarify / no action>
+    ```
+
+    If no conflicts were detected, the subsection MUST contain exactly the
+    literal line:
+
+    ```
+    _No potential conflicts detected._
+    ```
+
+    so absence of the section is distinguishable from absence of conflicts.
+
+   Note: `2-OBJECTIVE.md` and `7-SUMMARY.md` are NOT ingested into the
+   parent project. They remain in the archived run folder for human review.
+   Do NOT attempt to commit them outside the run folder.
+
+### Step 3 — Run the merge sequence
+
+3a. `git checkout __BASE_BRANCH__`
+3b. `git pull origin __BASE_BRANCH__` (resolve any pull-conflicts inline
+    using your session context)
+3c. Determine whether __BASE_BRANCH__ is an ancestor of __RUN_BRANCH__:
+    `git merge-base --is-ancestor __BASE_BRANCH__ __RUN_BRANCH__` (exit 0 = ancestor)
+
+3d. If __BASE_BRANCH__ IS an ancestor of __RUN_BRANCH__:
+    `git merge --ff-only __RUN_BRANCH__`
+
+3e. Otherwise (base has moved on since the run started):
+    1. `git checkout __RUN_BRANCH__`
+    2. `git rebase __BASE_BRANCH__` (resolve any rebase-conflicts inline)
+    3. `git checkout __BASE_BRANCH__`
+    4. `git merge --ff-only __RUN_BRANCH__`
+
+3f. `git push origin __BASE_BRANCH__`.
+    On rejection (non-FF push, remote moved between pull and push):
+    re-do 3b → 3e → 3f. Up to **3 push attempts** total. After the 3rd
+    rejection, OR on any non-conflict push failure (auth, network,
+    pre-push hook), invoke the failure path (see "Failure handling — push
+    rejection" below).
+
+## MUST NOT
+
+- Do NOT delete or rewrite ANY existing parent governance content. Append-only.
+- Do NOT create parent governance files where none exist. If 3-TODO.md has
+  content but the parent has no TODO file, the correct action is to SKIP
+  ingestion and record the skip in 7-SUMMARY.md.
+- Do NOT touch any file outside (a) parent governance files and (b) the
+  run folder __RUN_DIR__. Working files (file-a.txt, src/foo.py, etc.)
+  are already committed by the working session(s) — leave them alone.
+- Do NOT skip the merge sequence. Successful ingestion without merge is
+  a half-completed wind-down.
+
+## Failure handling
+
+### Ingestion ambiguity (Step 1 / 2)
+
+If you cannot determine where to ingest a given run-file (parent shape
+ambiguous, multiple equally-likely candidates, etc.):
+
+1. Log the skip in 7-SUMMARY.md's `## Wind-down → ### Governance mapping`
+   block (e.g. "3-TODO.md → (skipped — ambiguous: TODO.md and docs/TODO.md
+   both exist)").
+2. Proceed with the next file. Skipped ingestion is preferable to wrong
+   ingestion.
+
+### Unresolvable merge conflict (Step 3b / 3e)
+
+If a merge or rebase conflict cannot be resolved using session context:
+
+1. Write `__RUN_DIR__/6-HANDOVER.md` with this content (the wind-down
+   BLOCKED shape — different from working-session BLOCKED):
+
+   ```
+   # Wind-down BLOCKED: merge conflict
+
+   ## Files in conflict
+   - <path/to/file1>: <brief description of the conflict>
+   - <path/to/file2>: ...
+
+   ## Current merge state
+   <output of `git status` showing conflict markers>
+
+   ## Manual resolution
+   1. Resolve conflicts in the files above.
+   2. `git add <resolved-files>`
+   3. `git commit` (use the merge-commit message git suggests)
+   4. `git push origin __BASE_BRANCH__`
+   ```
+
+2. Emit `BLOCKED` as the LAST line of your output (on its own line).
+   The orchestrator will write a WIND-DOWN-FAILED marker and surface
+   recovery instructions to the user.
+
+### Push rejection (Step 3f, after 3 attempts) or other push failure
+
+Same as merge conflict above: write 6-HANDOVER.md with the wind-down
+BLOCKED shape, swap "Files in conflict" for "Push failure" with the push
+output, and emit `BLOCKED`.
+
+## Exit signal
+
+On successful merge + push: print exactly `COMPLETE` as the LAST line of
+your output, on its own line. The orchestrator will archive the run
+folder.
+
+On unresolvable conflict / push failure (per "Failure handling" above):
+print exactly `BLOCKED` as the LAST line of your output, on its own line.

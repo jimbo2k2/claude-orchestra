@@ -212,7 +212,42 @@ smoke_assert_empty() {
 }
 
 smoke_assert_with_governance() {
-    die "with-governance assertions are Phase 12"
+    local tmpdir="$1"
+    local wt
+    # Pick the (single) worktree directly with find — no glob/ls/pipefail trap.
+    wt=$(find "$tmpdir/wt" -mindepth 1 -maxdepth 1 -type d -name 'run-*' -print -quit 2>/dev/null)
+    [ -n "$wt" ] || die "ASSERT FAIL: no worktree found"
+
+    # Each parent file: original [fixture-original] entry preserved + correct marker present
+    grep -q '\[fixture-original\] T001' "$wt/TODO.md"     || die "ASSERT FAIL: TODO.md original lost"
+    grep -q '\[smoke-todo\]'              "$wt/TODO.md"     || die "ASSERT FAIL: TODO.md missing [smoke-todo] marker"
+
+    grep -q '\[fixture-original\] D001' "$wt/DECISIONS.md" || die "ASSERT FAIL: DECISIONS.md original lost"
+    grep -q '\[smoke-decision\]'          "$wt/DECISIONS.md" || die "ASSERT FAIL: DECISIONS.md missing [smoke-decision] marker"
+
+    grep -q '\[fixture-original\] C001' "$wt/CHANGELOG.md" || die "ASSERT FAIL: CHANGELOG.md original lost"
+    grep -q '\[smoke-changelog\]'         "$wt/CHANGELOG.md" || die "ASSERT FAIL: CHANGELOG.md missing [smoke-changelog] marker"
+
+    # No marker leaked into the wrong file.
+    ! grep -q '\[smoke-decision\]'  "$wt/TODO.md"      || die "ASSERT FAIL: [smoke-decision] leaked into TODO.md"
+    ! grep -q '\[smoke-changelog\]' "$wt/TODO.md"      || die "ASSERT FAIL: [smoke-changelog] leaked into TODO.md"
+    ! grep -q '\[smoke-todo\]'      "$wt/DECISIONS.md" || die "ASSERT FAIL: [smoke-todo] leaked into DECISIONS.md"
+    ! grep -q '\[smoke-changelog\]' "$wt/DECISIONS.md" || die "ASSERT FAIL: [smoke-changelog] leaked into DECISIONS.md"
+    ! grep -q '\[smoke-todo\]'      "$wt/CHANGELOG.md" || die "ASSERT FAIL: [smoke-todo] leaked into CHANGELOG.md"
+    ! grep -q '\[smoke-decision\]'  "$wt/CHANGELOG.md" || die "ASSERT FAIL: [smoke-decision] leaked into CHANGELOG.md"
+
+    # Wind-down per-file commits visible on the merged base branch. Use literal
+    # arrow U+2192 to match the prompt's commit-message convention.
+    (
+        cd "$wt"
+        git log --grep "wind-down: ingest 3-TODO.md →"      --format=%H | grep -q . || die "ASSERT FAIL: missing TODO ingest commit"
+        git log --grep "wind-down: ingest 4-DECISIONS.md →" --format=%H | grep -q . || die "ASSERT FAIL: missing DECISIONS ingest commit"
+        git log --grep "wind-down: ingest 5-CHANGELOG.md →" --format=%H | grep -q . || die "ASSERT FAIL: missing CHANGELOG ingest commit"
+    )
+
+    # Work products from the OBJECTIVE.
+    [ "$(cat "$wt/file-a.txt" 2>/dev/null)" = "alpha" ] || die "ASSERT FAIL: file-a.txt"
+    [ "$(cat "$wt/file-b.txt" 2>/dev/null)" = "beta" ]  || die "ASSERT FAIL: file-b.txt"
 }
 
 cmd_test() {
