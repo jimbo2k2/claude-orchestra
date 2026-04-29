@@ -33,6 +33,10 @@ MODEL="${ORCHESTRA_CONFIG[MODEL]}"
 EFFORT="${ORCHESTRA_CONFIG[EFFORT]}"
 COOLDOWN="${ORCHESTRA_CONFIG[COOLDOWN_SECONDS]}"
 CRASH_COOLDOWN="${ORCHESTRA_CONFIG[CRASH_COOLDOWN_SECONDS]}"
+QUOTA_PACING="${ORCHESTRA_CONFIG[QUOTA_PACING]}"
+QUOTA_THRESHOLD="${ORCHESTRA_CONFIG[QUOTA_THRESHOLD]}"
+QUOTA_POLL_INTERVAL="${ORCHESTRA_CONFIG[QUOTA_POLL_INTERVAL]}"
+CREDENTIALS_FILE="${HOME}/.claude/.credentials.json"
 
 WINDDOWN_LOCK="$WORKTREE_DIR/.orchestra/runs/.wind-down.lock"
 
@@ -134,6 +138,105 @@ Recovery (resolve merge/push manually):
 EOF
             ;;
     esac
+}
+
+# ─── Quota pacing ────────────────────────────────────────────────────────────
+# Cherry-picked from main:bin/orchestrator.sh. Polls the OAuth usage endpoint
+# and pauses between sessions when 5-hour utilization is at or above
+# QUOTA_THRESHOLD. Falls back to a no-op (no sleep) on any auth/network
+# failure so missing credentials never block progress.
+
+# Fetch current quota utilization from the OAuth usage endpoint.
+# Returns JSON: {"five_hour": N, "seven_day": N, "resets_at": "ISO8601"}
+# Returns non-zero on failure (no creds, endpoint unavailable, auth expired).
+# Bails immediately on missing credentials — no curl call, no network timeout.
+fetch_quota() {
+    if [ ! -f "$CREDENTIALS_FILE" ]; then
+        return 1
+    fi
+
+    local token
+    token=$(python3 -c "import json; print(json.load(open('$CREDENTIALS_FILE'))['claudeAiOauth']['accessToken'])" 2>/dev/null) || return 1
+    [ -n "$token" ] || return 1
+
+    local response
+    response=$(curl -s --max-time 10 \
+        -H "Authorization: Bearer $token" \
+        -H "anthropic-beta: oauth-2025-04-20" \
+        "https://api.anthropic.com/api/oauth/usage" 2>/dev/null) || return 1
+
+    if ! echo "$response" | jq -e '.five_hour.utilization' &>/dev/null; then
+        return 1
+    fi
+
+    local five_hour seven_day resets_at
+    five_hour=$(echo "$response" | jq -r '.five_hour.utilization // 0')
+    seven_day=$(echo "$response" | jq -r '.seven_day.utilization // 0')
+    resets_at=$(echo "$response" | jq -r '.five_hour.resets_at // empty')
+
+    echo "{\"five_hour\": $five_hour, \"seven_day\": $seven_day, \"resets_at\": \"$resets_at\"}"
+}
+
+# Wait for quota to drop below threshold. Called before each claude --print
+# invocation when QUOTA_PACING=true. Logs to stderr so smoke-output capture
+# (stdout) is not polluted.
+#
+# API utilization fields are integer percentages (0-100), so plain bash
+# integer comparison suffices — no bc dependency.
+wait_for_quota() {
+    if [ "$QUOTA_PACING" != "true" ]; then
+        return 0
+    fi
+
+    local quota_json
+    quota_json=$(fetch_quota) || {
+        echo "   Quota check failed (auth/network). Proceeding without pacing." >&2
+        return 0
+    }
+
+    local five_hour seven_day resets_at
+    five_hour=$(echo "$quota_json" | jq -r '.five_hour')
+    seven_day=$(echo "$quota_json" | jq -r '.seven_day')
+    resets_at=$(echo "$quota_json" | jq -r '.resets_at')
+
+    echo "   Quota: 5h=${five_hour}% 7d=${seven_day}% (threshold: ${QUOTA_THRESHOLD}%)" >&2
+
+    if [ "$five_hour" -ge "$QUOTA_THRESHOLD" ]; then
+        local reset_epoch now_epoch wait_seconds
+        reset_epoch=$(date -d "$resets_at" +%s 2>/dev/null) || reset_epoch=0
+        now_epoch=$(date +%s)
+        wait_seconds=$((reset_epoch - now_epoch))
+
+        if [ "$wait_seconds" -gt 0 ]; then
+            local wait_minutes=$((wait_seconds / 60))
+            local reset_time
+            reset_time=$(date -d "$resets_at" '+%H:%M:%S UTC' 2>/dev/null || echo "$resets_at")
+            echo "   5-hour quota at ${five_hour}% (>= ${QUOTA_THRESHOLD}%). Pausing until reset at $reset_time (~${wait_minutes}m)" >&2
+
+            while [ "$wait_seconds" -gt 0 ]; do
+                local sleep_for=$QUOTA_POLL_INTERVAL
+                if [ "$wait_seconds" -lt "$sleep_for" ]; then
+                    sleep_for=$((wait_seconds + 10))  # small buffer past reset
+                fi
+                sleep "$sleep_for"
+
+                quota_json=$(fetch_quota) || break
+                five_hour=$(echo "$quota_json" | jq -r '.five_hour')
+                resets_at=$(echo "$quota_json" | jq -r '.resets_at')
+
+                if [ "$five_hour" -lt "$QUOTA_THRESHOLD" ]; then
+                    echo "   Quota dropped to ${five_hour}%. Resuming." >&2
+                    return 0
+                fi
+
+                reset_epoch=$(date -d "$resets_at" +%s 2>/dev/null) || break
+                now_epoch=$(date +%s)
+                wait_seconds=$((reset_epoch - now_epoch))
+            done
+
+            echo "   Quota window reset. Resuming." >&2
+        fi
+    fi
 }
 
 session_num=0
@@ -304,6 +407,9 @@ EOF
     # (per spec Section 11.C: inotify + stdout silence with SIGTERM/SIGKILL).
     stdout_log=$(mktemp)
     stderr_log=$(mktemp)
+    # Quota pacing: pause if 5-hour utilization is at or above threshold.
+    # No-op when QUOTA_PACING != true or credentials are unavailable.
+    wait_for_quota
     set +e
     run_session_with_watchdog "$prompt" "$stdout_log" "$stderr_log"
     code=$?
@@ -433,6 +539,10 @@ DA_EOF
                 # 9-sessions/, so the file lives directly under RUN_DIR.
                 wd_stdout_log=$(mktemp)
                 wd_stderr_log=$(mktemp)
+                # Quota pacing: pause if 5-hour utilization is at or above
+                # threshold. No-op when QUOTA_PACING != true or credentials
+                # are unavailable.
+                wait_for_quota
                 set +e
                 run_session_with_watchdog "$wd_prompt" "$wd_stdout_log" "$wd_stderr_log"
                 wd_code=$?
