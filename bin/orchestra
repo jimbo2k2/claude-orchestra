@@ -30,7 +30,52 @@ EOF
 
 die() { echo "ERROR: $1" >&2; exit 1; }
 
-cmd_init()   { die "init not yet implemented (Phase 3)"; }
+cmd_init() {
+    local target="${1:-.}"
+    target="$(cd "$target" 2>/dev/null && pwd)" || die "Directory does not exist: ${1:-.}"
+
+    # Must be a git repo (no auto-init per spec Section 12 step 2)
+    git -C "$target" rev-parse --show-toplevel >/dev/null 2>&1 \
+        || die "$target is not a git repository. If this is intentional, run 'git init' first then retry."
+
+    # inotify-tools preflight (Linux-only target per spec Section 11.C)
+    command -v inotifywait >/dev/null 2>&1 \
+        || die "inotify-tools not installed — run 'apt-get install inotify-tools' (Ubuntu/Debian) or your distro's equivalent"
+
+    local orch="$target/.orchestra"
+    mkdir -p "$orch/runtime/bin" "$orch/runtime/lib" "$orch/runs/archive"
+
+    # Copy runtime files. Source paths relative to this script's location.
+    cp "$SCRIPT_DIR/orchestra"          "$orch/runtime/bin/orchestra"
+    chmod +x "$orch/runtime/bin/orchestra"
+    # orchestrator.sh is added in Phase 4; copy if it exists, otherwise skip silently
+    if [ -f "$SCRIPT_DIR/orchestrator.sh" ]; then
+        cp "$SCRIPT_DIR/orchestrator.sh" "$orch/runtime/bin/orchestrator.sh"
+        chmod +x "$orch/runtime/bin/orchestrator.sh"
+    fi
+    cp "$LIB_DIR/config.sh" "$orch/runtime/lib/config.sh"
+
+    # Copy templates only if missing — never overwrite user content
+    local TEMPLATE_DIR="$SCRIPT_DIR/../templates"
+    for pair in "CONFIG.md:CONFIG.md" "OBJECTIVE.md:OBJECTIVE.md" "orchestra-CLAUDE.md:CLAUDE.md"; do
+        local src="${pair%:*}" dst="${pair#*:}"
+        if [ ! -f "$orch/$dst" ]; then
+            cp "$TEMPLATE_DIR/$src" "$orch/$dst"
+            echo "  Created .orchestra/$dst"
+        else
+            echo "  Skipped .orchestra/$dst (already exists)"
+        fi
+    done
+
+    cat <<EOF
+
+Done. Next steps:
+  1. Edit .orchestra/CONFIG.md — set MAX_SESSIONS, MODEL, WORKTREE_BASE, BASE_BRANCH
+  2. Edit .orchestra/OBJECTIVE.md with the brief for your first run
+  3. Commit .orchestra/CONFIG.md and .orchestra/OBJECTIVE.md to your base branch
+  4. Run: .orchestra/runtime/bin/orchestra run
+EOF
+}
 cmd_run()    { die "run not yet implemented (Phase 4)"; }
 cmd_status() { die "status not yet implemented (Phase 15)"; }
 cmd_test()   { die "test not yet implemented (Phase 11)"; }

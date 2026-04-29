@@ -20,10 +20,19 @@ fi
 
 # Each known subcommand should exit non-zero (stubs error out — they're not implemented)
 # but should NOT print "Unknown command"
+# `init` has a real implementation with side effects, so target a throwaway temp dir.
+REPO="$(pwd)"
 for cmd in init run status test reset; do
-    if out=$(./bin/orchestra "$cmd" 2>&1); then
-        # Stubs may exit 0 for help-like behaviour or non-zero — both fine, just check no "Unknown command"
-        :
+    if [ "$cmd" = "init" ]; then
+        TMP_DISPATCH=$(mktemp -d)
+        ( cd "$TMP_DISPATCH" && git init -q && out=$("$REPO/bin/orchestra" init . 2>&1) || true; echo "$out" ) >/tmp/.orchestra_dispatch_out 2>&1 || true
+        out="$(cat /tmp/.orchestra_dispatch_out)"
+        rm -rf "$TMP_DISPATCH" /tmp/.orchestra_dispatch_out
+    else
+        if out=$(./bin/orchestra "$cmd" 2>&1); then
+            # Stubs may exit 0 for help-like behaviour or non-zero — both fine, just check no "Unknown command"
+            :
+        fi
     fi
     if echo "$out" | grep -q "Unknown command"; then
         echo "subcommand '$cmd' was treated as unknown"
