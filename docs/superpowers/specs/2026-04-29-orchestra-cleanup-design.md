@@ -126,7 +126,19 @@ The agent receives a wind-down prompt that constrains it to the following contra
    - `7-SUMMARY.md` and `2-OBJECTIVE.md` are NOT ingested — they remain in the archived run folder for human review.
 3. **Per-file commit on the run-branch** with message `wind-down: ingest <run-file> → <parent-file>`. Separate commits per ingested file make per-file review possible.
 4. **Append-only against parent files.** Existing parent content is preserved verbatim — new entries appended at the bottom or the project's documented insertion point.
-4a. **Surface conflicts in the run summary.** Before appending each new entry, the agent scans the existing parent file for entries that may semantically conflict with the new one (same key/topic but contradictory status, decision reversal, superseded TODO entries, etc.). Append-only is preserved — agent does NOT modify the existing entry — but each potential conflict is recorded in `7-SUMMARY.md`'s wind-down block under a "Potential governance conflicts" subsection with: source run-file + entry, target parent-file + conflicting line/section, the agent's reading of why they conflict, and a recommended resolution for human review. This avoids silent documentation debt where main accumulates contradictory entries no one notices.
+4a. **Surface conflicts in the run summary.** Before appending each new entry, the agent scans the existing parent file for entries that may semantically conflict with the new one (same key/topic but contradictory status, decision reversal, superseded TODO entries, etc.). Append-only is preserved — agent does NOT modify the existing entry — but each potential conflict is recorded in `7-SUMMARY.md`'s wind-down block under a "Potential governance conflicts" subsection. This avoids silent documentation debt where main accumulates contradictory entries no one notices.
+
+   **Schema for each conflict entry** (consistent format so a future tool can grep / parse):
+
+   ```markdown
+   ### Conflict <N>
+   - **Source:** `<run-file>:<entry-id-or-line>` — `<one-line summary of the new entry>`
+   - **Target:** `<parent-file>:<entry-id-or-line>` — `<one-line summary of the existing entry>`
+   - **Reading:** <agent's analysis of why they conflict — 1-3 sentences>
+   - **Recommended resolution:** <suggested action for human — supersede / merge / clarify / no action>
+   ```
+
+   If no conflicts are detected, the subsection contains the literal line `_No potential conflicts detected._` so absence of the section vs absence of conflicts can be distinguished.
 5. **Run the merge sequence** to integrate the run branch into the base branch:
    - `git checkout <BASE_BRANCH>`
    - `git pull origin <BASE_BRANCH>` (resolve any conflicts inline using session context)
@@ -177,11 +189,12 @@ User fires runs sequentially but they may overlap in execution.
 
 - **Run-folder atomic mkdir is the canonical uniqueness gate.** At run start, `mkdir .orchestra/runs/<run-timestamp>/` runs with no `-p`. On `EEXIST` (two runs starting in the same second), the second run sleeps 1s and retries with a fresh timestamp; bails after 3 retries with an explicit error. This is authoritative — tmux name and worktree path collisions become non-issues because they're derived from the same timestamp that just succeeded the mkdir.
 - **Cleanup on downstream failure.** Immediately after the mkdir succeeds, the orchestrator installs `trap 'rm -rf .orchestra/runs/<run-timestamp>/' ERR` covering subsequent setup steps (worktree creation, tmux launch, etc.). If any step fails before the orchestrator hands off to the session loop, the trap removes the orphaned run folder so it doesn't appear as "stale" in `orchestra status`. Once the session loop is live, the trap is cleared via `trap - ERR` (the run folder now legitimately persists). **`ERR` is the only signal the setup trap uses** — the lock trap (Section 6.1) reserves `EXIT INT TERM`, so the two traps are non-overlapping in scope. Setup-cleanup runs at a different orchestrator phase from lock-acquisition; the traps are sequential, not nested.
-- **Tmux session names** — `<TMUX_PREFIX>-<HHMMSS>` (default prefix `orchestra`, e.g. `orchestra-153022`). Conflicts handled by the atomic-mkdir gate above.
-- **Worktree path** — `<WORKTREE_BASE>/run-<HHMMSS>`. Same: gate is upstream.
+- **Run timestamp format** — `<YYYYMMDD>-<HHMMSS>` (e.g. `20260429-153022`). Used uniformly across run folder, tmux session name, and worktree path so `orchestra status` can map between them with a single string.
+- **Tmux session names** — `<TMUX_PREFIX>-<run-timestamp>` (default prefix `orchestra`, e.g. `orchestra-20260429-153022`). Conflicts handled by the atomic-mkdir gate above.
+- **Worktree path** — `<WORKTREE_BASE>/run-<run-timestamp>`. Same: gate is upstream.
 - **No project-level lockfile** — dropped. The atomic-mkdir gate is sufficient.
 - **Wind-down lock** — `.orchestra/runs/.wind-down.lock` (Section 6.1). The only persistent lock. Serialises merges to base branch without blocking parallel work.
-- **`orchestra status`** — enumerates `.orchestra/runs/<run>/`. State derived from markers in the run folder: `BLOCKED` marker → blocked; `WIND-DOWN-FAILED` → wind-down failed; otherwise active (if a tmux session matching `<TMUX_PREFIX>-<HHMMSS>` is alive) or stale (if not). Markers (`BLOCKED`, `WIND-DOWN-FAILED`) are flag files; their *presence*, not contents, is authoritative for classification. Archived runs (under `archive/`) shown as a count only.
+- **`orchestra status`** — enumerates `.orchestra/runs/<run>/`. State derived from markers in the run folder: `BLOCKED` marker → blocked; `WIND-DOWN-FAILED` → wind-down failed; otherwise active (if a tmux session matching `<TMUX_PREFIX>-<run-timestamp>` is alive) or stale (if not). **Markers (`BLOCKED`, `WIND-DOWN-FAILED`) are checked BEFORE tmux liveness** — marker presence is authoritative, in case a marker is written and the tmux is still tearing down (race window). Markers are flag files; their *presence*, not contents, is what classifies the run. Archived runs (under `archive/`) shown as a count only.
 
 ## 8. File Layout (Repo)
 
@@ -204,6 +217,13 @@ CLAUDE.md                  # full rewrite — current copy is multiply stale
                            # (lists lib/orchestrator.sh, lib/stage-changes.sh,
                            # lib/commit-and-update.sh, lib/verify-completion.sh —
                            # none of which exist in the current or new layout)
+                           # New CLAUDE.md should cover: bash tech-stack, the
+                           # bin/ + lib/ + templates/ + examples/ + docs/ layout,
+                           # repo-local conventions (set -euo pipefail, exec bits,
+                           # Linux-only), the run-vs-session vocabulary, where the
+                           # spec/plan live, and pointers to MIGRATION.md and
+                           # examples/smoke-test/. NO governance/protocol section
+                           # (orchestra has no opinion on those for callers).
 MIGRATION.md               # Claude-readable migration prompt (Section 14)
 ```
 
@@ -261,6 +281,8 @@ Contents (template at `templates/orchestra-CLAUDE.md`):
 This file is orchestra-shipped. Edits by the user persist (init won't overwrite if it exists), but the canonical version lives in the templates.
 
 No `.claude/settings.json` is created or required. No `hooks/` directory.
+
+**Headless invocation.** Orchestrator spawns each session via `claude --print --dangerously-skip-permissions --model <MODEL> --thinking-effort <EFFORT>` (consistent with the existing `bin/orchestrator.sh` invocation pattern). Orchestra does not install or require `.claude/settings.json` — `--dangerously-skip-permissions` is the only permission-bypass needed for headless work. The user's interactive Claude Code config (in `~/.claude/`) is irrelevant to autonomous runs.
 
 User invokes via `.orchestra/runtime/bin/orchestra run`. README suggests an alias.
 
@@ -359,7 +381,10 @@ Claude exits zero but final output line is not one of the recognised exit signal
 ### Category C — Hang
 No new output, no file changes in worktree, no active subprocess for `MAX_HANG_SECONDS` (default 1200 = 20 min).
 
-**Detection:** `inotifywatch` on worktree (file changes) + tail on session log (output bytes); if both quiet for the threshold → hang.
+**Detection:** `inotifywait -mr` on the worktree (file changes) AND a tail-position monitor on session stdout (output bytes); if BOTH signals quiet for the threshold → hang. Both must be quiet because Claude can be silently editing for a while or thinking visibly without writing — neither alone indicates a hang.
+
+**Dependency:** Requires `inotify-tools` (provides `inotifywait`). Linux-only (consistent with the Linux-only target stated in Section 6.1). `orchestra init` preflight checks for `inotifywait` on `$PATH` and errors with `"inotify-tools not installed — run 'apt-get install inotify-tools' (Ubuntu/Debian) or your distro's equivalent"` if missing. No polling fallback is provided — the dependency is cheap and the alternative (poll `find <worktree> -newer <marker>` every N seconds) would burn CPU on long runs and miss sub-poll-interval activity.
+
 **Behaviour:** Send SIGTERM to Claude, wait 30s, SIGKILL if needed. Then treat as Category A.
 
 ### Category D — Inconsistent finish (COMPLETE only)
@@ -418,7 +443,7 @@ Steps:
 6. Copy `lib/config.sh` → `.orchestra/runtime/lib/config.sh`.
 7. Copy `templates/CONFIG.md` → `.orchestra/CONFIG.md` (only if doesn't exist).
 8. Copy `templates/OBJECTIVE.md` → `.orchestra/OBJECTIVE.md` (only if doesn't exist).
-9. Copy `templates/orchestra-CLAUDE.md` → `.orchestra/CLAUDE.md` (only if doesn't exist).
+9. Copy `templates/orchestra-CLAUDE.md` → `.orchestra/CLAUDE.md` (only if doesn't exist). **Note:** the source template filename is `orchestra-CLAUDE.md` to disambiguate within `templates/`; the installed name is `CLAUDE.md`.
 10. Print next-steps message.
 
 **Removed:** governance directory creation, settings.json, CLAUDE.md scaffolding, DEVELOPMENT-PROTOCOL, toolchain.md, standing-ac.md, HANDOVER.md, INBOX.md, README.md, auto-`git init`. None of these are orchestra's business.
@@ -491,7 +516,7 @@ Instead: ship `MIGRATION.md` at the **orchestra repo root only** (not installed 
    - Rename `.orchestra/sessions/` → `.orchestra/runs/`
    - Convert `.orchestra/config` (bash) → `.orchestra/CONFIG.md` (markdown), translating each key. Keys dropped from the new model (TODO_FILE, DECISIONS_FILE, CHANGELOG_FILE, DEVELOPMENT_PROTOCOL, TOOLCHAIN_FILE, TASKS, TMUX_SESSION) are noted to the user but not carried over.
    - Move `.orchestra/HANDOVER.md` and `.orchestra/INBOX.md` (project-level) to a backup location; new model has these per-run only.
-   - **Install `.orchestra/CLAUDE.md`** (new file in this version) from the template. If the user's existing `.orchestra/` has a `CLAUDE.md` from the old orchestra (pre-strip-back), back it up to `<existing>.bak` and install the new agent-facing version — old version was about in-session governance enforcement which is no longer orchestra's concern.
+   - **Install `.orchestra/CLAUDE.md`** (new file in this version) from the template. **Detection rule for old-style file:** if the existing `.orchestra/CLAUDE.md` references `DEVELOPMENT-PROTOCOL.md`, `tasks.md`, `log.md`, "autonomous session rules", or "Multi-Session Autonomous Workflow" — it's an old orchestra-installed file. Back it up to `<existing>.bak` and install the new agent-facing version. If the file appears to be user-written (no old-orchestra signatures), prompt the user before overwriting.
    - **Per-run file renames inside any in-flight or recent run folders:**
      - `tasks.md` → `3-TODO.md`
      - `log.md` is split by content type when ingesting: decisions go to `4-DECISIONS.md`, changelog entries to `5-CHANGELOG.md`, free-form notes/findings/parked issues to `7-SUMMARY.md`. The new model has no single "log" file — split is done by Claude using judgement.
@@ -501,23 +526,65 @@ Instead: ship `MIGRATION.md` at the **orchestra repo root only** (not installed 
 
 The prompt content lives in `MIGRATION.md`. It is detailed enough that Claude can execute it without needing the user's cumulative project history — the prompt instructs Claude to discover state from the filesystem.
 
+## 14a. Implementation Approach: Rewrite + Cherry-Pick
+
+The runtime should be **rewritten cleanly**, not adapted in place. Reasons:
+- The architectural shift is large (governance paths gone, per-run numbered layout new, wind-down concept new, BLOCKED semantics rebuilt, crash categories rebuilt).
+- Current `bin/orchestrator.sh` is 39KB with deeply interleaved concerns (TODO scanning, task branching, governance scaffolding) — most of which we're dropping.
+- Adapting in place leaves dead-code paths and risks bugs from incomplete edits.
+- The current code is mid-evolution (recent session-scoped governance rewrite); compounding more edits accelerates entropy.
+
+**What to rewrite:**
+- `bin/orchestra` — small CLI dispatcher
+- `bin/orchestrator.sh` — session loop, crash detection, wind-down spawn, lock management
+- `lib/config.sh` — CONFIG.md parser
+- `install.sh` — much smaller
+- `templates/` — fresh CONFIG.md, OBJECTIVE.md, orchestra-CLAUDE.md
+
+**What to cherry-pick from the existing repo** (proven idioms; reference paths shown for the implementer):
+- **Tmux launch pattern** — `bin/orchestrator.sh` `tmux new-session -d -s ...` invocation. Reuse the cd-into-project + tmux-detached pattern. Adapt to the new tmux-name format (Section 7).
+- **Worktree creation + branch setup** — `bin/orchestrator.sh:540-560` (current `git worktree add` flow). Reuse the worktree dir creation, branch tracking. Adapt to the new run-folder layout and the atomic-mkdir gate (Section 7).
+- **Quota pacing** — `bin/orchestrator.sh` quota polling + threshold + cooldown logic. Reuse verbatim (the keys `QUOTA_PACING`, `QUOTA_THRESHOLD`, `QUOTA_POLL_INTERVAL`, `COOLDOWN_SECONDS` survive into new CONFIG.md).
+- **Session JSON log structure** — current orchestrator writes `9-sessions/NNN.json` files with rate-limit events, exit signal, session metadata. Reuse the schema; new orchestrator writes them to the new path.
+- **Crash counter mechanics** — increment-on-crash, reset-on-success pattern. Adapt to the new categories A/B/C/D/E (current code only has A in effect).
+- **Recovery prompt prepending pattern** — `bin/orchestrator.sh` `RECOVERY_PROMPT` heredoc + damage-assessment preamble. Directly useful for new Categories D and E. Reshape the preamble for the new (much narrower) damage cases (uncommitted-changes-on-COMPLETE; wind-down crash).
+- **Tmux-name conflict pre-flight** — current orchestrator's `tmux has-session` check pattern.
+- **Lockfile `set -C` idiom** — if any current code uses noclobber atomic file creation, reference it. Otherwise this is straightforward.
+
+**What NOT to cherry-pick** (deliberately dropped):
+- Anything reading `TODO_FILE`/`DECISIONS_FILE`/`CHANGELOG_FILE` config keys
+- Anything scanning `TODO/TODO.md` for T-numbered tasks
+- Per-task branching logic (`orchestra/<t-number>-<slug>` branches)
+- The `cmd_init` governance directory scaffolding
+- The `cmd_init` `.claude/settings.json` setup
+- The `cmd_init` DEVELOPMENT-PROTOCOL.md scaffolding
+- The `stage-changes.sh` hook
+- BLOCKED-via-task-dependency logic
+- The in-session prompt heredoc structure (rewrite for the new model — references to TASKS, TODO.md, task-branching all go away)
+
+**Practical mechanic.** Existing scripts stay in git history on the current branch. The implementation creates new files (or empties old ones and writes fresh) on a new branch. When a known-good idiom is needed, `git show main:bin/orchestrator.sh | grep -A20 'quota'` pulls it forward. Cleaner than incremental editing through 80KB of layered legacy.
+
 ## 15. Out of Scope
 
 - Parallel-run UX (firing multiple runs simultaneously). Sequential-with-overlap is supported by the runtime; no CLI surface for parallel.
 - Auto-resume of `BLOCKED` runs. User starts a fresh run after resolving the blocker.
 - The wind-down agent's full prompt — only the contract (Section 6.3) is in this spec; the prompt itself is implementation detail.
+- The contents of `MIGRATION.md` — Section 14 specifies that the file exists and what it should walk Claude through, but the prompt's exact wording is implementation detail. Same treatment as the wind-down prompt.
 
 ## 16. Decisions Captured
 
-- **Wind-down counts towards `MAX_SESSIONS`?** No — exempt. Agent emitted `COMPLETE` based on objective completion; wind-down is a fixed-cost ingestion step.
-- **Wind-down on `HANDOVER` or `BLOCKED`?** No. Only `COMPLETE` triggers wind-down. `HANDOVER` continues the loop; `BLOCKED` halts the run for human resolution.
-- **Wind-down on `MAX_SESSIONS` reached without `COMPLETE`?** No — soft fail. User reviews and decides next steps.
-- **Crash counter resets on success?** Yes — counter is "consecutive", any successful signal (`COMPLETE` or `HANDOVER`) resets it. `BLOCKED` does not reset (no further sessions follow regardless).
-- **Auto `git init` in `orchestra init`?** No — error out with explicit instruction.
-- **`orchestra migrate` subcommand?** No — replaced by `MIGRATION.md` Claude-readable prompt for interactive migration.
-- **Agent or orchestrator runs the wind-down merge sequence?** Agent. The agent has session context to resolve any conflicts that arise during pull/rebase using its existing intelligence; an orchestrator-driven mechanical merge would just fail on conflict and require human escalation.
-- **Does orchestra force commits at session boundaries?** No — only enforces the load-bearing invariant: `COMPLETE` requires clean state (otherwise wind-down loses uncommitted work). All other commit cadence is the parent project's CLAUDE.md hierarchy concern.
-- **Category D (inconsistent finish) applies on which signals?** `COMPLETE` only. `HANDOVER` and `BLOCKED` may legitimately leave dirty state.
+Key decisions are documented inline in the relevant sections. This index points to them rather than restating:
+
+- Wind-down exempt from `MAX_SESSIONS`; only `COMPLETE` triggers wind-down — Section 6 opening, Section 11.5
+- Crash counter rules + reset semantics — Section 11 "Crash counter rules"
+- No auto `git init` in `orchestra init` — Section 12 step 2
+- No `orchestra migrate` subcommand; replaced by `MIGRATION.md` — Section 14
+- Agent (not orchestrator) runs the wind-down merge sequence — Section 6.2, Section 6.3 step 5
+- Orchestra enforces only one state invariant (`COMPLETE` → clean worktree) — Section 11 exit signals
+- Category D applies to `COMPLETE` only — Section 11.D
+- Append-only ingestion + conflict surfacing — Section 6.3 step 4, 4a
+- `inotify-tools` is the chosen hang-detection mechanism (no fallback) — Section 11.C
+- `--dangerously-skip-permissions` is the headless invocation path — Section 9 "Headless invocation"
 
 ## 17. Open Risks
 
