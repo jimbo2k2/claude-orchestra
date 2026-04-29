@@ -33,6 +33,7 @@ cat > .orchestra/CONFIG.md <<EOF
 - \`WORKTREE_BASE\`: $TMP/wt
 - \`BASE_BRANCH\`: master
 - \`TMUX_PREFIX\`: orch-test
+- \`QUOTA_PACING\`: false
 - \`COOLDOWN_SECONDS\`: 0
 - \`CRASH_COOLDOWN_SECONDS\`: 0
 EOF
@@ -63,7 +64,9 @@ done
 ls "$TMP/wt"/run-* >/dev/null 2>&1 || { echo "no worktree created"; exit 1; }
 WORKTREE=$(ls -d "$TMP/wt"/run-* | head -1)
 [ -d "$WORKTREE/.orchestra/runs" ] || { echo "no runs dir in worktree"; exit 1; }
-RUN_DIR=$(ls -d "$WORKTREE"/.orchestra/runs/*/ | head -1)
+# Phase 8 archives the run on COMPLETE; the run dir lives under archive/<ts>/.
+RUN_DIR=$(ls -d "$WORKTREE"/.orchestra/runs/archive/*/ 2>/dev/null | head -1)
+[ -n "$RUN_DIR" ] || { echo "no archived run dir found"; exit 1; }
 [ -d "${RUN_DIR}9-sessions" ] || { echo "no 9-sessions in run dir"; exit 1; }
 
 # Orchestrator wrote a session JSON for the COMPLETE run

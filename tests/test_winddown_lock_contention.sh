@@ -27,7 +27,7 @@ if echo "$prompt" | grep -q "wind-down session"; then
     # Hold the lock long enough for the test to inspect it
     sleep 5
     git checkout master 2>/dev/null || true
-    branch=$(echo "$prompt" | grep "Run branch:" | awk '{print $3}')
+    branch=$(echo "$prompt" | grep "Run branch:" | sed -E 's/.*Run branch:[[:space:]]+([^[:space:]]+).*/\1/')
     git merge --ff-only "$branch" 2>/dev/null || true
     echo "wind-down done"
     echo "COMPLETE"
@@ -51,6 +51,7 @@ cat > .orchestra/CONFIG.md <<EOF
 - \`WORKTREE_BASE\`: $TMP/wt
 - \`BASE_BRANCH\`: master
 - \`TMUX_PREFIX\`: orch-lk
+- \`QUOTA_PACING\`: false
 - \`COOLDOWN_SECONDS\`: 0
 - \`CRASH_COOLDOWN_SECONDS\`: 0
 EOF

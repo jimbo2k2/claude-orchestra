@@ -16,7 +16,7 @@ if echo "$prompt" | grep -q "wind-down session"; then
     # fixture has no real remote.
     git checkout master 2>/dev/null || true
     git pull origin master 2>/dev/null || true
-    branch=$(echo "$prompt" | grep "Run branch:" | awk '{print $3}')
+    branch=$(echo "$prompt" | grep "Run branch:" | sed -E 's/.*Run branch:[[:space:]]+([^[:space:]]+).*/\1/')
     git merge --ff-only "$branch" 2>/dev/null || true
     git push origin master 2>/dev/null || true
     echo "wind-down done"
@@ -46,6 +46,7 @@ cat > .orchestra/CONFIG.md <<EOF
 - \`WORKTREE_BASE\`: $TMP/wt
 - \`BASE_BRANCH\`: master
 - \`TMUX_PREFIX\`: orch-wd
+- \`QUOTA_PACING\`: false
 - \`COOLDOWN_SECONDS\`: 0
 - \`CRASH_COOLDOWN_SECONDS\`: 0
 EOF

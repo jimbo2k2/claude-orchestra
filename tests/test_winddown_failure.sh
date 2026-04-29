@@ -15,7 +15,10 @@ if echo "$prompt" | grep -q "wind-down session"; then
     echo "I am stuck on a conflict"
     # Spec Section 6.3 wind-down BLOCKED shape: files in conflict, git status
     # excerpt, manual resolution.
-    rd=$(echo "$prompt" | grep "Run dir:" | awk '{print $3}')
+    # The wind-down prompt template uses `- Run dir:    <path>` (leading
+    # bullet); grep + grep -oE picks the absolute path regardless of
+    # column count.
+    rd=$(echo "$prompt" | grep "Run dir:" | grep -oE '/[^ ]+\.orchestra/runs/[^ ]+' | head -1)
     cat > "$rd/6-HANDOVER.md" <<HOEOF
 # Wind-down BLOCKED
 
@@ -46,6 +49,7 @@ cat > .orchestra/CONFIG.md <<EOF
 - \`WORKTREE_BASE\`: $TMP/wt
 - \`BASE_BRANCH\`: master
 - \`TMUX_PREFIX\`: orch-wf
+- \`QUOTA_PACING\`: false
 - \`COOLDOWN_SECONDS\`: 0
 - \`CRASH_COOLDOWN_SECONDS\`: 0
 EOF

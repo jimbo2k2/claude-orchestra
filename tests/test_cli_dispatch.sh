@@ -18,11 +18,13 @@ if ./bin/orchestra bogus 2>/dev/null; then
     exit 1
 fi
 
-# Each known subcommand should exit non-zero (stubs error out — they're not implemented)
-# but should NOT print "Unknown command"
-# `init` has a real implementation with side effects, so target a throwaway temp dir.
+# Each known subcommand should be routed by the dispatcher and not be flagged
+# as unknown. `init` has a real side-effecting implementation, so target a
+# throwaway temp dir. `test` invokes a real smoke run against Claude (5-15
+# min, burns tokens) — its dispatching is already covered by the usage-grep
+# above, so skip the actual invocation here.
 REPO="$(pwd)"
-for cmd in init run status test reset; do
+for cmd in init run status reset; do
     if [ "$cmd" = "init" ]; then
         TMP_DISPATCH=$(mktemp -d)
         ( cd "$TMP_DISPATCH" && git init -q && out=$("$REPO/bin/orchestra" init . 2>&1) || true; echo "$out" ) >/tmp/.orchestra_dispatch_out 2>&1 || true

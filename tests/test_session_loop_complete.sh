@@ -39,6 +39,7 @@ cat > .orchestra/CONFIG.md <<EOF
 - \`WORKTREE_BASE\`: $TMP/wt
 - \`BASE_BRANCH\`: master
 - \`TMUX_PREFIX\`: orch-complete-test
+- \`QUOTA_PACING\`: false
 - \`COOLDOWN_SECONDS\`: 0
 - \`CRASH_COOLDOWN_SECONDS\`: 0
 EOF
