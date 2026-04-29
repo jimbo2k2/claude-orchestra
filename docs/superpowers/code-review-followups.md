@@ -164,6 +164,16 @@ Format: each item lists the **phase**, the **file:line** where applicable, and t
 
 ---
 
+## From Phase 11 — Smoke-test driver + empty/ fixture
+
+- [ ] **`bin/orchestra` `cmd_test` — bare-remote `git init` doesn't pin `--initial-branch=master`.** The bare remote inherits the user's git default-branch config (often `main`); the working repo uses `--initial-branch=master`. Push of `master` succeeds (creates the branch on the remote) but the bare remote's symbolic HEAD ends up pointing at a non-existent `main`. Cosmetic — `git log` (no `--all`) on the bare remote shows "your current branch 'main' does not have any commits yet" until something targets `main`. Pin `--initial-branch=master` on the bare init too.
+
+- [ ] **`bin/orchestra` `cmd_test` wait loop — `tmux has-session` polled every 10s.** Working-session + wind-down completed in ~56s on the first smoke run. A 10s poll is fine here, but if a future test variant has multi-second sub-actions a tighter (e.g. 2s) interval would catch state transitions sooner. Current value not problematic; flagging for awareness.
+
+- [ ] **`bin/orchestra` `cmd_test` — wait-loop only breaks on tmux session ending; no orchestrator-exit-code check.** If the orchestrator exits non-zero (e.g. infrastructure failure 3, BLOCKED 0, MAX_CRASHES 1), the smoke driver still proceeds to the assertion phase and fails there with a generic "no archived run found". A more diagnostic flow would peek at the most recent session JSON's `exit_signal`/`crash_category` before the assertion phase to give a clearer failure message. Quality-of-life only.
+
+---
+
 ## How to apply
 
 At Phase 19 (branch wrap-up):
