@@ -54,6 +54,7 @@ cmd_init() {
         chmod +x "$orch/runtime/bin/orchestrator.sh"
     fi
     cp "$LIB_DIR/config.sh" "$orch/runtime/lib/config.sh"
+    cp "$LIB_DIR/winddown-prompt.txt" "$orch/runtime/lib/winddown-prompt.txt"
 
     # Copy templates only if missing — never overwrite user content
     local TEMPLATE_DIR="$SCRIPT_DIR/../templates"

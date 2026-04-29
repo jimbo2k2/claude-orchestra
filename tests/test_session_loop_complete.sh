@@ -61,7 +61,9 @@ for i in $(seq 1 30); do
 done
 
 WORKTREE=$(ls -d "$TMP/wt"/run-* | head -1)
-RUN_DIR=$(ls -d "$WORKTREE"/.orchestra/runs/*/ | head -1)
+# Phase 8: COMPLETE now triggers wind-down + archive. The run dir is moved
+# into <worktree>/.orchestra/runs/archive/<ts>/, so look there.
+RUN_DIR=$(ls -d "$WORKTREE"/.orchestra/runs/archive/*/ | head -1)
 
 # Should have exactly one session JSON (MAX_SESSIONS=1, COMPLETE on first).
 n=$(ls "${RUN_DIR}9-sessions/"*.json 2>/dev/null | wc -l)

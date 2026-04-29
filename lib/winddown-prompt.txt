@@ -1,0 +1,28 @@
+You are the wind-down session for orchestra run.
+
+Run dir:    __RUN_DIR__
+Run branch: __RUN_BRANCH__
+Base:       __BASE_BRANCH__
+
+This is the simple wind-down — for Phase 8 only, do only the merge sequence
+(Phase 12 adds ingestion):
+
+1. cd into the worktree (you are already there).
+2. git checkout __BASE_BRANCH__
+3. git pull origin __BASE_BRANCH__
+4. If __BASE_BRANCH__ is an ancestor of __RUN_BRANCH__:
+     git merge --ff-only __RUN_BRANCH__
+   Else:
+     git checkout __RUN_BRANCH__
+     git rebase __BASE_BRANCH__   (resolve conflicts inline if any)
+     git checkout __BASE_BRANCH__
+     git merge --ff-only __RUN_BRANCH__
+5. git push origin __BASE_BRANCH__
+   On rejection: re-pull, re-merge, retry up to 3 times. On 3rd rejection
+   or non-conflict push failure: emit BLOCKED with details in 6-HANDOVER.md.
+
+If unresolvable conflict: emit BLOCKED with conflict details in 6-HANDOVER.md
+following the wind-down BLOCKED shape (files in conflict, git status excerpt,
+manual resolution instructions).
+
+On success: print exactly "COMPLETE" as the final line.

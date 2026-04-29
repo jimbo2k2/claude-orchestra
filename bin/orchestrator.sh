@@ -34,6 +34,46 @@ EFFORT="${ORCHESTRA_CONFIG[EFFORT]}"
 COOLDOWN="${ORCHESTRA_CONFIG[COOLDOWN_SECONDS]}"
 CRASH_COOLDOWN="${ORCHESTRA_CONFIG[CRASH_COOLDOWN_SECONDS]}"
 
+WINDDOWN_LOCK="$WORKTREE_DIR/.orchestra/runs/.wind-down.lock"
+
+# Spec Section 6.1: orchestrator-owned lock file. Line 1 is the holder PID,
+# line 2 is /proc/<pid>/stat field 22 (process start time in clock ticks).
+# Storing start time defends against PID recycling — a different process
+# reusing the same PID will have a different start time so we treat the lock
+# as stale.
+acquire_winddown_lock() {
+    local backoff=30
+    while true; do
+        if (set -C; printf '%d\n%s\n' $$ "$(awk '{print $22}' /proc/self/stat)" > "$WINDDOWN_LOCK") 2>/dev/null; then
+            return 0
+        fi
+
+        # Lock exists — check liveness
+        local lock_pid lock_starttime live_starttime
+        lock_pid=$(sed -n '1p' "$WINDDOWN_LOCK" 2>/dev/null) || lock_pid=""
+        lock_starttime=$(sed -n '2p' "$WINDDOWN_LOCK" 2>/dev/null) || lock_starttime=""
+
+        if [ -z "$lock_pid" ] || ! kill -0 "$lock_pid" 2>/dev/null; then
+            rm -f "$WINDDOWN_LOCK"
+            continue
+        fi
+
+        # PID alive — verify start-time matches (defends against PID recycling)
+        if [ -e "/proc/$lock_pid/stat" ]; then
+            live_starttime=$(awk '{print $22}' "/proc/$lock_pid/stat" 2>/dev/null)
+            if [ "$live_starttime" != "$lock_starttime" ]; then
+                rm -f "$WINDDOWN_LOCK"
+                continue
+            fi
+        fi
+
+        # Genuinely held by live orchestrator — backoff
+        sleep "$backoff"
+        backoff=$((backoff * 2))
+        [ $backoff -gt 300 ] && backoff=300
+    done
+}
+
 session_num=0
 crash_count=0
 prev_category=""
@@ -270,7 +310,47 @@ EOF
     else
         crash_count=0
         case "$signal" in
-            COMPLETE) echo "Run complete (wind-down deferred to Phase 9)"; exit 0 ;;
+            COMPLETE)
+                echo "Run COMPLETE — entering wind-down"
+
+                acquire_winddown_lock
+
+                # Trap discipline (spec Section 6.1) — EXIT INT TERM are reserved
+                # for the wind-down lock. Phase 4's ERR trap was already cleared
+                # in cmd_run before exec'ing the orchestrator, so no overlap.
+                trap 'rm -f "$WINDDOWN_LOCK"' EXIT INT TERM
+
+                # Build wind-down prompt from template
+                wd_prompt=$(cat "$WORKTREE_DIR/.orchestra/runtime/lib/winddown-prompt.txt" \
+                    | sed "s|__RUN_DIR__|$RUN_DIR|g" \
+                    | sed "s|__BASE_BRANCH__|$BASE_BRANCH|g" \
+                    | sed "s|__RUN_BRANCH__|$RUN_BRANCH|g")
+
+                set +e
+                wd_out=$(echo "$wd_prompt" | claude --print --dangerously-skip-permissions \
+                    --model "$MODEL" --thinking-effort "$EFFORT" 2>&1)
+                wd_code=$?
+                set -e
+
+                # Same awk-based last-non-empty-line extractor as the working
+                # session (spec Section 11; Phase 5 fix-up).
+                wd_last=$(printf '%s' "$wd_out" | awk 'NF{line=$0} END{print line}' | tr -d '[:space:]')
+
+                if [ $wd_code -ne 0 ] || [ "$wd_last" != "COMPLETE" ]; then
+                    # Phase 9 will fully implement wind-down failure handling;
+                    # for now mark and exit.
+                    touch "$RUN_DIR/WIND-DOWN-FAILED"
+                    echo "Wind-down failed — see Phase 9 for full failure handling" >&2
+                    exit 1
+                fi
+
+                # Successful wind-down — archive (spec Section 6.3)
+                archive_dir="$WORKTREE_DIR/.orchestra/runs/archive"
+                mkdir -p "$archive_dir"
+                mv "$RUN_DIR" "$archive_dir/$RUN_TS"
+                echo "Run archived at $archive_dir/$RUN_TS"
+                exit 0
+                ;;
             HANDOVER) sleep "$COOLDOWN"; continue ;;
             BLOCKED)  echo "BLOCKED — Phase 12 will handle this"; exit 0 ;;
         esac
