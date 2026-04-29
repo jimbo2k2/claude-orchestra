@@ -36,6 +36,7 @@ CRASH_COOLDOWN="${ORCHESTRA_CONFIG[CRASH_COOLDOWN_SECONDS]}"
 
 session_num=0
 crash_count=0
+prev_category=""
 
 write_session_json() {
     local n="$1" started="$2" ended="$3" code="$4" signal="$5" cat="$6"
@@ -81,7 +82,29 @@ while [ $session_num -lt $MAX_SESSIONS ] && [ $crash_count -lt $MAX_CRASHES ]; d
     session_num=$((session_num + 1))
     started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-    prompt=$(build_session_prompt "$session_num")
+    # Per spec Section 11: when a previous session ended with a crash
+    # category, prepend a damage-assessment preamble so the next session
+    # inspects the worktree before resuming the main task.
+    if [ -n "$prev_category" ]; then
+        case "$prev_category" in
+            A|B|C) recovery_note="The previous session crashed or hung. Inspect git status and any work-in-progress files before continuing the main task." ;;
+            D)     recovery_note="The previous session emitted COMPLETE but left uncommitted changes. Assess each modification, decide whether to keep or discard, commit deliberately on the run-branch, then either re-emit COMPLETE (if objective met) or continue with HANDOVER." ;;
+            *)     recovery_note="" ;;
+        esac
+        base_prompt=$(build_session_prompt "$session_num")
+        prompt=$(cat <<EOF
+RECOVERY PREAMBLE — the previous session ended with category $prev_category.
+
+$recovery_note
+
+---
+
+$base_prompt
+EOF
+)
+    else
+        prompt=$(build_session_prompt "$session_num")
+    fi
 
     # Run claude headlessly (per spec Section 9 "Headless invocation")
     set +e
@@ -102,26 +125,41 @@ while [ $session_num -lt $MAX_SESSIONS ] && [ $crash_count -lt $MAX_CRASHES ]; d
 
     if [ $code -ne 0 ]; then
         category="A"
+    elif [ "$last_line" = "COMPLETE" ]; then
+        cd "$WORKTREE_DIR"
+        if [ -n "$(git status --porcelain)" ]; then
+            signal="COMPLETE"
+            category="D"
+        else
+            signal="COMPLETE"
+        fi
+    elif [ "$last_line" = "HANDOVER" ] || [ "$last_line" = "BLOCKED" ]; then
+        signal="$last_line"
     else
-        case "$last_line" in
-            COMPLETE|HANDOVER|BLOCKED) signal="$last_line" ;;
-            *) category="B" ;;  # Phase 6 will refine this
-        esac
+        category="B"
     fi
 
     write_session_json "$session_num" "$started_at" "$ended_at" "$code" "$signal" "$category" \
         || { echo "ERROR: failed writing session JSON (session $session_num, exit $code)" >&2; exit 2; }
 
-    if [ -n "$category" ]; then
+    # Reset prev_category before potentially setting it from this iteration
+    # so it doesn't stay sticky after a successful (non-categorical) session.
+    prev_category=""
+
+    if [ "$category" = "A" ] || [ "$category" = "B" ]; then
         crash_count=$((crash_count + 1))
+        prev_category="$category"
         sleep "$CRASH_COOLDOWN"
+    elif [ "$category" = "D" ]; then
+        # Spec Section 11.D: don't increment counter, don't restart;
+        # wind-down's recovery prompt will assess the dirty state.
+        echo "Category D: COMPLETE with dirty worktree — deferring to wind-down (Phase 9)"
+        exit 0
     else
         crash_count=0
-        sleep "$COOLDOWN"
-
         case "$signal" in
             COMPLETE) echo "Run complete (wind-down deferred to Phase 9)"; exit 0 ;;
-            HANDOVER) continue ;;
+            HANDOVER) sleep "$COOLDOWN"; continue ;;
             BLOCKED)  echo "BLOCKED — Phase 12 will handle this"; exit 0 ;;
         esac
     fi

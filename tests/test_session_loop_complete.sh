@@ -18,6 +18,10 @@ mkdir -p "$TMP/fake-bin"
 cat > "$TMP/fake-bin/claude" <<'EOF'
 #!/bin/bash
 cat >/dev/null
+# Phase 6: COMPLETE requires a clean worktree (Cat D check). The orchestrator
+# initialises .orchestra/runs/<ts>/ before invoking claude, so a real agent
+# would commit those state files during their session. Mirror that here.
+git add -A 2>/dev/null && git -c user.email=test@x -c user.name=test commit -q -m "session work" 2>/dev/null || true
 printf 'doing some work...\nCOMPLETE\n   \n'
 exit 0
 EOF
