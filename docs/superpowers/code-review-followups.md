@@ -128,6 +128,32 @@ Format: each item lists the **phase**, the **file:line** where applicable, and t
 
 - [ ] **`bin/orchestrator.sh` — 5s `poll_interval` magic number could be promoted to a named local or config knob in a later phase.** Not actionable now.
 
+- [ ] **`bin/orchestrator.sh` — 5s inotifywait startup-deadline magic number.** Same family as the `poll_interval` followup; the `startup_deadline=$(($(date +%s) + 5))` literal could be promoted alongside the poll interval to named locals or a config knob.
+
+- [ ] **`bin/orchestrator.sh` — redundant post-loop `grep -q "Watches established"` after the startup-poll loop.** If the loop exited via `break`, the grep already matched; if via deadline expiry, the grep will fail anyway. Tightening to an explicit flag (`local established=0; ... established=1; break`) removes one re-read of the file. Cosmetic.
+
+- [ ] **`tests/test_stderr_preservation.sh` — `tmux kill-server` trap is too broad.** Same nit as Phase 4/7 followups; kill-session by `<TMUX_PREFIX>-$RUN_TS` to avoid clobbering other tmux sessions on the dev machine. Likely contributor to the parallel-run flakiness observed during Phase 7 fix-up review.
+
+---
+
+## From Phase 8 — Wind-down lock + simple wind-down spawn
+
+- [ ] **`bin/orchestrator.sh:316-321` — SIGINT/SIGTERM window between `acquire_winddown_lock` return and `trap` install.** Spec Section 6.1 line 101 says "immediately after acquiring the lock". The window is microseconds but non-zero — a signal arriving in that gap orphans the lock. Mitigation: install a placeholder `trap '...' INT TERM` before calling acquire, then add EXIT after.
+
+- [ ] **`bin/orchestrator.sh:325-327` — `sed` template substitution corrupts on `|`/`&`/`\` in path.** `RUN_DIR` includes user-config `WORKTREE_BASE`, which `validate_config` only checks for absoluteness — not metacharacter-free. Theoretical, but cheap to harden via awk-based substitution or escape interpolation.
+
+- [ ] **`bin/orchestrator.sh:342` — `WIND-DOWN-FAILED` marker is empty.** Spec Section 6.4 step 3 specifies contents: timestamp, failure category (A/B/C/BLOCKED), last 50 lines of session output. Phase 9 will populate; track explicitly so it doesn't ship the failure-detection logic without populating the marker.
+
+- [ ] **`bin/orchestrator.sh:56-67` — stale-lock recovery `rm; continue` busy-loops with no rate limit.** If the lock file is being touched by an external thing in tight loop, `acquire_winddown_lock` pins a CPU. Add a short `sleep 1` before `continue` on stale-lock branches, or a max-stale-evict counter.
+
+- [ ] **`bin/orchestrator.sh:53-54` — PID + start-time read is non-atomic against partial writers.** Two separate `sed -n '1p'` / `sed -n '2p'` reads. With `printf` of ~30 bytes essentially atomic on Linux, the practical risk is ~zero, but `mapfile -t lines < "$WINDDOWN_LOCK"` gets it in one read and is clearer.
+
+- [ ] **`tests/test_winddown_lock.sh:64-72` — wait-loop break condition is subtle.** The `tmux has-session ... || break` exits the loop the first iteration WORKTREE is non-empty AND tmux is gone. Add a one-line comment explaining the intent.
+
+- [ ] **`bin/orchestrator.sh:324-327` — wind-down template-load failure surfaces as "command failed".** A `[ -f "$WORKTREE_DIR/.orchestra/runtime/lib/winddown-prompt.txt" ] || die "wind-down prompt template missing"` preflight gives a cleaner error.
+
+- [ ] **`bin/orchestrator.sh:329-340` — wind-down session has no watchdog.** Spec Section 6.4 lists Cat C during wind-down as a failure mode. Currently a hung wind-down session blocks the orchestrator forever. Phase 9 will reuse `run_session_with_watchdog` for the wind-down call site so hang detection covers both.
+
 ---
 
 ## How to apply

@@ -44,7 +44,13 @@ WINDDOWN_LOCK="$WORKTREE_DIR/.orchestra/runs/.wind-down.lock"
 acquire_winddown_lock() {
     local backoff=30
     while true; do
-        if (set -C; printf '%d\n%s\n' $$ "$(awk '{print $22}' /proc/self/stat)" > "$WINDDOWN_LOCK") 2>/dev/null; then
+        # `$$` (the parent shell's PID), not `self` — `$(awk ... /proc/self/stat)`
+        # resolves to awk's own PID inside the command substitution, recording
+        # awk's start-time on line 2 instead of the orchestrator's. The stale-
+        # detection branch below reads `/proc/$lock_pid/stat` for the
+        # orchestrator PID, so the two values would never match and any
+        # contended acquire would falsely evict the live holder.
+        if (set -C; printf '%d\n%s\n' $$ "$(awk '{print $22}' /proc/$$/stat)" > "$WINDDOWN_LOCK") 2>/dev/null; then
             return 0
         fi
 
@@ -326,11 +332,32 @@ EOF
                     | sed "s|__BASE_BRANCH__|$BASE_BRANCH|g" \
                     | sed "s|__RUN_BRANCH__|$RUN_BRANCH|g")
 
+                # Separate stdout/stderr (matches working-session pattern; Phase 7
+                # fix-up). Phase 9 will populate WIND-DOWN-FAILED with timestamp,
+                # category, and last 50 lines of session output — separating the
+                # streams now means Phase 9 can choose what to include without
+                # an I/O-wiring refactor.
+                #
+                # Note: this branch has no watchdog — Phase 9 will reuse
+                # run_session_with_watchdog so a hung wind-down session doesn't
+                # block the orchestrator forever (see code-review-followups).
+                wd_stdout_log=$(mktemp)
+                wd_stderr_log=$(mktemp)
                 set +e
-                wd_out=$(echo "$wd_prompt" | claude --print --dangerously-skip-permissions \
-                    --model "$MODEL" --thinking-effort "$EFFORT" 2>&1)
+                echo "$wd_prompt" | claude --print --dangerously-skip-permissions \
+                    --model "$MODEL" --thinking-effort "$EFFORT" \
+                    > "$wd_stdout_log" 2> "$wd_stderr_log"
                 wd_code=$?
                 set -e
+                wd_out=$(cat "$wd_stdout_log")
+
+                # Preserve stderr on failure (matches Phase 7 fix-up for working
+                # sessions). RUN_DIR is correct here — wind-down is a single-
+                # attempt session, not a numbered series under 9-sessions/.
+                if [ "$wd_code" -ne 0 ]; then
+                    cp "$wd_stderr_log" "$RUN_DIR/wind-down-stderr.txt"
+                fi
+                rm -f "$wd_stdout_log" "$wd_stderr_log"
 
                 # Same awk-based last-non-empty-line extractor as the working
                 # session (spec Section 11; Phase 5 fix-up).
