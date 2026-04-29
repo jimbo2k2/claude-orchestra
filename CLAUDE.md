@@ -1,59 +1,91 @@
 # Project: claude-orchestra
 
-Autonomous multi-session orchestrator for Claude Code (v3). Protocol-driven, project-local, worktree-isolated.
+Autonomous multi-session orchestration runtime for Claude Code. Spawns
+headless `claude --print` sessions inside a git worktree, watches for
+hangs/crashes, runs a wind-down session that ingests run-level governance
+into the parent project's governance shape, then merges to the base
+branch.
 
-## Tech Stack
-- Runtime: Bash (POSIX-compatible where possible)
-- No framework, no package manager
+## Tech stack
 
-## Architecture
+Bash, git, tmux, jq, inotify-tools. Linux-only.
+
+## Layout
+
 ```
 bin/
-└── orchestra              — CLI entry point (run, test, status, reset, init)
+├── orchestra              CLI dispatcher (init, run, status, test, reset)
+└── orchestrator.sh        session loop — runs inside the run worktree's tmux
 lib/
-├── orchestrator.sh        — Main session loop with worktree lifecycle + crash recovery
-├── config.sh              — Config reader + preflight validation
-├── stage-changes.sh       — PostToolUse hook: git staging
-├── commit-and-update.sh   — Commit helper (invoked by orchestrator, not hooks)
-└── verify-completion.sh   — Completion verifier (invoked by orchestrator, not hooks)
+├── config.sh              CONFIG.md parser + validation (sourced)
+└── winddown-prompt.txt    wind-down agent contract template
 templates/
-├── DEVELOPMENT-PROTOCOL.md — Generic 20-step protocol template
-├── CLAUDE-workflow.md     — Workflow section appended to project CLAUDE.md
-├── settings.json          — .claude/settings.json (staging hook only, project-local path)
-├── config                 — .orchestra/config template
-├── toolchain.md           — .orchestra/toolchain.md skeleton
-├── README.md              — .orchestra/README.md template
-├── governance/            — Governance file templates (TODO, DECISIONS, CHANGELOG + CLAUDE.md protocols)
-├── HANDOVER.md, INBOX.md  — Session state templates
-install.sh                 — Bootstraps into project .orchestra/ (no global install)
+├── CONFIG.md              user-editable runtime config
+├── OBJECTIVE.md           user-editable run brief
+└── orchestra-CLAUDE.md    agent-facing guidance for the installed `.orchestra/`
+examples/
+└── smoke-test/
+    ├── empty/             no parent governance — exercises no-op ingestion
+    ├── with-governance/   pre-populated TODO/DECISIONS/CHANGELOG
+    └── with-conflict/     contradicting decision — exercises conflict surfacing
 docs/
-└── archive/               — Historical v2 spec and flow diagram (superseded)
+├── superpowers/
+│   ├── specs/             design spec (canonical)
+│   ├── plans/             implementation plan
+│   ├── code-review-followups.md   minor items deferred to wrap-up
+│   └── RESUME.md          handover notes between rewrite sessions
+└── archive/               historical v2 docs (kept as history)
+tests/
+└── test_*.sh              unit tests (fake claude); plus run-tests.sh runner
+MIGRATION.md               Claude-readable prompt for migrating an old install
+README.md
 ```
 
-## Key Design Decisions (v3)
-
-- **Project-local:** No `~/claude-scripts/`. Everything in `.orchestra/bin/`, `.orchestra/hooks/`, `.orchestra/lib/`.
-- **Protocol-driven:** Sessions follow `DEVELOPMENT-PROTOCOL.md`, not inline prompt steps.
-- **Config-driven:** All parameters in `.orchestra/config`. No env var overrides, no CLI args.
-- **Worktree isolation:** Each session gets a git worktree. Main working tree stays on `main`.
-- **Single settings.json:** No settings swap between interactive and autonomous modes.
-- **Staging hook only:** Stop hooks removed. The protocol defines when commits happen.
-- **INBOX as cold-start briefing:** Queue-specific context passed via INBOX.md, not template modifications.
-- **Governance sync:** After each session, governance files are synced from worktree to main tree.
-
 ## Conventions
-- All scripts use `set -euo pipefail`
-- Scripts must be executable (`chmod +x`)
-- State files live in `.orchestra/` within user projects
-- Hook paths in `.claude/settings.json` are project-relative (`.orchestra/hooks/`)
-- Config is the single source of truth — no env var fallbacks
 
-## Governance
-Three numbered, archivable files:
-- **TODO** (T-numbers) — tasks with status, dependencies
-- **DECISIONS** (D-numbers) — choices with alternatives considered
-- **CHANGELOG** (C-numbers) — what changed, linked to tasks and decisions
+- `set -euo pipefail` in every shipped script (except files that are
+  sourced — `lib/config.sh` deliberately does not, to avoid leaking
+  options into the caller's shell).
+- Shipped scripts are `chmod +x`.
+- Project-local install: `orchestra init` writes everything under
+  `.orchestra/runtime/` in the user's project. No `~/` install, no global
+  paths.
+- `tests/run-tests.sh --fast` skips the long real-time-wait tests
+  (hang detection, smoke). Run the full suite at end-of-phase / pre-merge.
+- All run state lives inside the worktree at
+  `<WORKTREE_BASE>/run-<ts>/.orchestra/runs/<ts>/`. The project tree's
+  `.orchestra/runs/<ts>/` is just the atomic-mkdir uniqueness gate
+  (Section 7 of the spec).
 
-Session state:
-- **HANDOVER.md** — session-to-session context
-- **INBOX.md** — human-to-Claude async messages (also used as cold-start briefing)
+## Vocabulary (per spec Section 2)
+
+- **Run** — a single user-initiated unit of work, defined by an
+  `OBJECTIVE.md`. One run = one git worktree, one tmux session, one
+  run-branch.
+- **Working session** — one Claude invocation within a run. Working
+  sessions repeat (HANDOVER → next session) until the agent emits
+  `COMPLETE` or `BLOCKED`, or `MAX_SESSIONS`/`MAX_CONSECUTIVE_CRASHES` is
+  reached.
+- **Wind-down session** — one additional Claude invocation, exempt from
+  `MAX_SESSIONS`, that runs only after a successful `COMPLETE`. It
+  ingests run governance into parent governance and merges the
+  run-branch into base.
+
+## Where things live
+
+- **Spec (canonical):** `docs/superpowers/specs/2026-04-29-orchestra-cleanup-design.md`
+- **Plan:** `docs/superpowers/plans/2026-04-29-orchestra-cleanup-plan.md`
+- **Smoke fixtures:** `examples/smoke-test/{empty,with-governance,with-conflict}/`
+- **Migration prompt:** `MIGRATION.md` (Claude-readable; for users coming
+  from an older orchestra install)
+- **Code review followups:** `docs/superpowers/code-review-followups.md`
+  (minor items batched for Phase 19 wrap-up)
+
+## What this project does NOT have an opinion on
+
+Orchestra runs autonomous Claude sessions inside a worktree but doesn't
+prescribe how the parent project structures its own governance, builds,
+tests, or commit conventions — that's the parent project's CLAUDE.md
+hierarchy and the agent reads it. Wind-down ingestion follows whatever
+governance shape the parent already has (or skips ingestion if it has
+none).
