@@ -80,6 +80,58 @@ acquire_winddown_lock() {
     done
 }
 
+write_winddown_failed_marker() {
+    local cat="$1" out="$2" handover="$3"
+    {
+        echo "Failed at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "Category: $cat"
+        echo ""
+        echo "--- Last 50 lines of session output ---"
+        echo "$out" | tail -50
+        if [ "$cat" = "BLOCKED" ] && [ -n "$handover" ] && [ -f "$handover" ]; then
+            echo ""
+            echo "--- Conflict/push-failure details from 6-HANDOVER.md ---"
+            cat "$handover"
+        fi
+    } > "$RUN_DIR/WIND-DOWN-FAILED"
+}
+
+print_winddown_recovery() {
+    local cat="$1"
+    cat <<EOF >&2
+
+WIND-DOWN FAILED ($cat). Run preserved at:
+  $RUN_DIR
+
+Run branch: $RUN_BRANCH
+
+EOF
+    case "$cat" in
+        A|B|C)
+            cat <<EOF >&2
+Recovery (the merge step did not complete):
+  cd $WORKTREE_DIR
+  git checkout $BASE_BRANCH
+  git merge --ff-only $RUN_BRANCH
+  git push origin $BASE_BRANCH
+
+EOF
+            ;;
+        BLOCKED)
+            cat <<EOF >&2
+Recovery (resolve merge/push manually):
+  cd $WORKTREE_DIR
+  cat $RUN_DIR/6-HANDOVER.md
+  # Resolve conflicts following the manual-resolution instructions in HANDOVER, then:
+  git add .
+  git commit
+  git push origin $BASE_BRANCH
+
+EOF
+            ;;
+    esac
+}
+
 session_num=0
 crash_count=0
 prev_category=""
@@ -332,28 +384,20 @@ EOF
                     | sed "s|__BASE_BRANCH__|$BASE_BRANCH|g" \
                     | sed "s|__RUN_BRANCH__|$RUN_BRANCH|g")
 
-                # Separate stdout/stderr (matches working-session pattern; Phase 7
-                # fix-up). Phase 9 will populate WIND-DOWN-FAILED with timestamp,
-                # category, and last 50 lines of session output — separating the
-                # streams now means Phase 9 can choose what to include without
-                # an I/O-wiring refactor.
-                #
-                # Note: this branch has no watchdog — Phase 9 will reuse
-                # run_session_with_watchdog so a hung wind-down session doesn't
-                # block the orchestrator forever (see code-review-followups).
+                # Wind-down runs under the same hang-detection watchdog as
+                # working sessions so a stuck wind-down (e.g. claude blocked on
+                # a prompt) is detectable as Cat C. Stderr is preserved on
+                # failure into RUN_DIR/wind-down-stderr.txt — wind-down is a
+                # single-attempt session, not a numbered series under
+                # 9-sessions/, so the file lives directly under RUN_DIR.
                 wd_stdout_log=$(mktemp)
                 wd_stderr_log=$(mktemp)
                 set +e
-                echo "$wd_prompt" | claude --print --dangerously-skip-permissions \
-                    --model "$MODEL" --thinking-effort "$EFFORT" \
-                    > "$wd_stdout_log" 2> "$wd_stderr_log"
+                run_session_with_watchdog "$wd_prompt" "$wd_stdout_log" "$wd_stderr_log"
                 wd_code=$?
                 set -e
                 wd_out=$(cat "$wd_stdout_log")
 
-                # Preserve stderr on failure (matches Phase 7 fix-up for working
-                # sessions). RUN_DIR is correct here — wind-down is a single-
-                # attempt session, not a numbered series under 9-sessions/.
                 if [ "$wd_code" -ne 0 ]; then
                     cp "$wd_stderr_log" "$RUN_DIR/wind-down-stderr.txt"
                 fi
@@ -363,11 +407,28 @@ EOF
                 # session (spec Section 11; Phase 5 fix-up).
                 wd_last=$(printf '%s' "$wd_out" | awk 'NF{line=$0} END{print line}' | tr -d '[:space:]')
 
-                if [ $wd_code -ne 0 ] || [ "$wd_last" != "COMPLETE" ]; then
-                    # Phase 9 will fully implement wind-down failure handling;
-                    # for now mark and exit.
-                    touch "$RUN_DIR/WIND-DOWN-FAILED"
-                    echo "Wind-down failed — see Phase 9 for full failure handling" >&2
+                # Spec Section 6.4 + Category E: wind-down failures don't auto-
+                # retry. Categorise the failure, write the marker, print user-
+                # facing recovery commands, exit non-zero. The run folder is
+                # NOT archived — preserved for inspection. Lock is released
+                # via the EXIT trap installed above.
+                if [ $wd_code -ne 0 ] || ! [[ "$wd_last" =~ ^(COMPLETE|BLOCKED)$ ]]; then
+                    # Wind-down crash (A/B/C) — order matters: 124 (watchdog
+                    # timeout) first, then 0 (clean exit but missing signal),
+                    # else default A (non-zero non-124).
+                    failure_cat="A"
+                    [ $wd_code -eq 124 ] && failure_cat="C"
+                    [ $wd_code -eq 0 ] && failure_cat="B"
+                    write_winddown_failed_marker "$failure_cat" "$wd_out" ""
+                    print_winddown_recovery "$failure_cat"
+                    exit 1
+                fi
+
+                if [ "$wd_last" = "BLOCKED" ]; then
+                    # Wind-down BLOCKED — agent gave up on merge conflict /
+                    # push failure. Marker includes 6-HANDOVER.md content.
+                    write_winddown_failed_marker "BLOCKED" "$wd_out" "$RUN_DIR/6-HANDOVER.md"
+                    print_winddown_recovery "BLOCKED"
                     exit 1
                 fi
 
