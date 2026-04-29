@@ -458,7 +458,31 @@ EOF
                 exit 0
                 ;;
             HANDOVER) sleep "$COOLDOWN"; continue ;;
-            BLOCKED)  echo "BLOCKED — Phase 12 will handle this"; exit 0 ;;
+            BLOCKED)
+                blocker_text=""
+                [ -f "$RUN_DIR/1-INBOX.md" ] && blocker_text+=$'\n\n--- 1-INBOX.md ---\n'$(cat "$RUN_DIR/1-INBOX.md")
+                [ -f "$RUN_DIR/6-HANDOVER.md" ] && blocker_text+=$'\n\n--- 6-HANDOVER.md ---\n'$(cat "$RUN_DIR/6-HANDOVER.md")
+
+                {
+                    echo "Blocked at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                    echo "Session: $session_num"
+                    echo "$blocker_text"
+                } > "$RUN_DIR/BLOCKED"
+
+                cat <<EOF >&2
+
+RUN BLOCKED. Run preserved at:
+  $RUN_DIR
+
+The agent could not proceed without an external dependency. See:
+  $RUN_DIR/BLOCKED
+  $RUN_DIR/6-HANDOVER.md (remaining work + dependency analysis)
+  $RUN_DIR/1-INBOX.md (any inline blocker text)
+
+After resolving the blocker, prepare a fresh OBJECTIVE.md and run again.
+EOF
+                exit 0
+                ;;
         esac
     fi
 done
