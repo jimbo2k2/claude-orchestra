@@ -257,9 +257,16 @@ Read the following files in $WORKTREE_DIR/.orchestra/runs/$RUN_TS/ for context:
 Make progress against the objective. Update the rolling files as you work.
 
 When done with this session, exit with EXACTLY one of:
-- COMPLETE — objective met, ready for wind-down (worktree must be clean)
-- HANDOVER — more work remains, write 6-HANDOVER.md briefing for the next session
-- BLOCKED — external dependency missing; write 6-HANDOVER.md with remaining-work and dependency analysis
+- COMPLETE — objective met. **Before emitting COMPLETE you MUST commit any
+  work to the run-branch.** Run \`git status\` first; \`git add\` + \`git commit\`
+  any uncommitted or untracked files. Orchestra enforces a clean-worktree
+  invariant at COMPLETE — dirty state will be flagged as Category D and
+  wind-down will then have to commit on your behalf during damage assessment.
+- HANDOVER — more work remains, write 6-HANDOVER.md briefing for the next
+  session. Dirty state is OK on HANDOVER (next session picks up from the
+  worktree).
+- BLOCKED — external dependency missing; write 6-HANDOVER.md with remaining
+  work and dependency analysis. Dirty state is OK on BLOCKED.
 
 The signal is the LAST line of your output, on its own line.
 EOF
@@ -364,14 +371,25 @@ EOF
         crash_count=$((crash_count + 1))
         prev_category="$category"
         sleep "$CRASH_COOLDOWN"
-    elif [ "$category" = "D" ]; then
-        # Spec Section 11.D: don't increment counter, don't restart;
-        # wind-down's recovery prompt will assess the dirty state.
-        echo "Category D: COMPLETE with dirty worktree — deferring to wind-down (Phase 9)"
-        exit 0
-    else
-        crash_count=0
-        case "$signal" in
+        continue
+    fi
+
+    # Below: clean COMPLETE/HANDOVER/BLOCKED signals OR Cat D (carries
+    # signal=COMPLETE). Cat D resets the crash counter the same way COMPLETE
+    # does — agent's intent was clean (spec Section 11.D), counter is not
+    # incremented and the merge sequence still proceeds.
+    crash_count=0
+
+    # Spec Section 11.D: Cat D triggers wind-down with a damage-assessment
+    # preamble. Wind-down's first job becomes "commit the dirty worktree on
+    # the run-branch", then the normal merge sequence runs.
+    winddown_damage_assessment=0
+    if [ "$category" = "D" ]; then
+        winddown_damage_assessment=1
+        echo "Category D: COMPLETE with dirty worktree — wind-down will commit before merge"
+    fi
+
+    case "$signal" in
             COMPLETE)
                 echo "Run COMPLETE — entering wind-down"
 
@@ -387,6 +405,25 @@ EOF
                     | sed "s|__RUN_DIR__|$RUN_DIR|g" \
                     | sed "s|__BASE_BRANCH__|$BASE_BRANCH|g" \
                     | sed "s|__RUN_BRANCH__|$RUN_BRANCH|g")
+
+                # Spec Section 11.D: prepend damage-assessment preamble when
+                # the previous working session was Cat D (clean intent + dirty
+                # worktree). Wind-down's first job is to commit deliberately
+                # on the run-branch before the normal merge sequence runs.
+                if [ "$winddown_damage_assessment" -eq 1 ]; then
+                    wd_prompt=$(cat <<DA_EOF
+DAMAGE ASSESSMENT — the previous working session emitted COMPLETE but left
+uncommitted or untracked changes in the worktree. **Before** the wind-down
+sequence below: run \`git status\`, assess each modification, and commit any
+keepers on the run-branch ($RUN_BRANCH) with sensible messages. After the
+worktree is clean, proceed with the normal wind-down sequence.
+
+---
+
+$wd_prompt
+DA_EOF
+)
+                fi
 
                 # Wind-down runs under the same hang-detection watchdog as
                 # working sessions so a stuck wind-down (e.g. claude blocked on
@@ -483,8 +520,7 @@ After resolving the blocker, prepare a fresh OBJECTIVE.md and run again.
 EOF
                 exit 0
                 ;;
-        esac
-    fi
+    esac
 done
 
 if [ $crash_count -ge $MAX_CRASHES ]; then
