@@ -481,9 +481,11 @@ cmd_reset() {
                 archived=$((archived + 1))
             done <<< "$active_runs"
 
-            # Remove stale wind-down lock if any.
-            if [ -f "$wt/.orchestra/.wind-down.lock" ]; then
-                rm -f "$wt/.orchestra/.wind-down.lock"
+            # Remove stale wind-down lock if any. Path matches
+            # bin/orchestrator.sh's WINDDOWN_LOCK (under runs/, not directly
+            # under .orchestra/).
+            if [ -f "$wt/.orchestra/runs/.wind-down.lock" ]; then
+                rm -f "$wt/.orchestra/runs/.wind-down.lock"
             fi
         done <<< "$worktrees"
     fi
