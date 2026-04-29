@@ -100,6 +100,36 @@ Format: each item lists the **phase**, the **file:line** where applicable, and t
 
 ---
 
+## From Phase 6 — Category B/D detection + recovery prompt
+
+- [ ] **`bin/orchestrator.sh:129` — `cd "$WORKTREE_DIR"` inside the COMPLETE branch persists for the rest of the script.** Idempotent today (tmux already starts the orchestrator with cwd=`$WORKTREE_DIR`), but a future refactor that changes the entry cwd could silently break invariants. Prefer subshell scoping: `if [ -n "$(cd "$WORKTREE_DIR" && git status --porcelain)" ]; then`.
+
+- [ ] **`tests/test_categories_bd.sh:40` — wait-loop pattern inconsistent with rest of suite.** Uses server-wide substring match `tmux ls 2>/dev/null | grep -q orch-bd` while other tests use the more precise `tmux has-session -t "<prefix>-$RUN_TS"`. Functional today but invites copy-paste mistakes. Align with the established pattern.
+
+- [ ] **`bin/orchestrator.sh:88-104` — extract `build_recovery_preamble()` helper.** Once Phase 7 (Cat C) and Phase 9 (wind-down) land, the inline preamble construction will grow. A helper alongside `build_session_prompt()` would mirror the symmetry.
+
+- [ ] **`bin/orchestrator.sh:90` — A|B|C share one recovery note.** When Phase 7 introduces hang detection (Cat C), a hung session likely needs different guidance ("the previous session hung — check whether the long-running operation completed"). Pre-staging a single arm is fine for Phase 6, but split when Phase 7 lands.
+
+- [ ] **`bin/orchestrator.sh:156` — Cat D message says "deferring to wind-down (Phase 9)".** Will become misleading once Phase 9 wind-down lands. Update when Phase 9 ships.
+
+---
+
+## From Phase 7 — Category C hang detection with inotifywait
+
+- [ ] **`bin/orchestrator.sh` — `stat -c %s ... || echo 0` masks file-deletion failures.** If either log is deleted mid-run the size collapses to 0 and stays equal across polls, manifesting as a false-positive Cat C hang. Distinguish "file gone" from "file unchanged" rather than swallowing the error.
+
+- [ ] **`bin/orchestrator.sh` — backgrounded pipeline `echo "$prompt" | claude ... &` captures `$!` as claude's pid; the `echo` half is unwaited.** Theoretical leak only (echo exits immediately) but worth tightening (e.g. process-substitution or a heredoc redirected directly into claude).
+
+- [ ] **`bin/orchestrator.sh` — no cleanup trap covers external interruption of the watchdog.** If the orchestrator itself is killed, `inotifywait` and `claude` become orphans and `inotify_log` leaks in `/tmp`. Track alongside Phase 8 wind-down lock work.
+
+- [ ] **`tests/test_hang_detection.sh:6` — `tmux kill-server` in trap is too broad.** Same nit as Phase 4 followup. Prefer `tmux kill-session -t "orch-c-$RUN_TS" 2>/dev/null || true` or kill by `TMUX_PREFIX` glob.
+
+- [ ] **`tests/test_hang_detection.sh:41-48` — small startup race in the wait-loop.** If dispatch hasn't created the tmux session yet, the for-loop's first iteration could `break` prematurely. Add an initial sleep, or only `break` after `has-session` has previously succeeded once.
+
+- [ ] **`bin/orchestrator.sh` — 5s `poll_interval` magic number could be promoted to a named local or config knob in a later phase.** Not actionable now.
+
+---
+
 ## How to apply
 
 At Phase 19 (branch wrap-up):

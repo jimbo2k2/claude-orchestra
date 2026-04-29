@@ -61,10 +61,38 @@ run_session_with_watchdog() {
     local stdout_log="$2"
     local stderr_log="$3"
 
-    local inotify_log
+    local inotify_log inotify_err
     inotify_log=$(mktemp)
-    inotifywait -mr --format '.' "$WORKTREE_DIR" >> "$inotify_log" 2>/dev/null &
+    inotify_err=$(mktemp)
+    inotifywait -mr --format '.' "$WORKTREE_DIR" >> "$inotify_log" 2>"$inotify_err" &
     local inotify_pid=$!
+
+    # Verify inotifywait is actually watching. inotifywait prints
+    # "Watches established." to stderr once it's up. If it failed at startup
+    # (max_user_watches, EACCES, etc.), bailing here is correct — running with
+    # only stdout-silence detection guarantees false-positive Cat C hangs.
+    local startup_deadline=$(($(date +%s) + 5))
+    while [ "$(date +%s)" -lt "$startup_deadline" ]; do
+        if ! kill -0 "$inotify_pid" 2>/dev/null; then
+            echo "ERROR: inotifywait died at startup. stderr:" >&2
+            cat "$inotify_err" >&2
+            rm -f "$inotify_log" "$inotify_err"
+            return 125  # distinguish from 124 timeout / claude exit codes
+        fi
+        if grep -q "Watches established" "$inotify_err" 2>/dev/null; then
+            break
+        fi
+        sleep 0.2
+    done
+
+    if ! grep -q "Watches established" "$inotify_err" 2>/dev/null; then
+        echo "ERROR: inotifywait did not establish watches within 5s. stderr:" >&2
+        cat "$inotify_err" >&2
+        kill -TERM "$inotify_pid" 2>/dev/null || true
+        rm -f "$inotify_log" "$inotify_err"
+        return 125
+    fi
+    rm -f "$inotify_err"  # drop after startup; main monitoring uses inotify_log only
 
     echo "$prompt" | claude --print --dangerously-skip-permissions \
         --model "$MODEL" --thinking-effort "$EFFORT" \
@@ -172,7 +200,23 @@ EOF
     code=$?
     set -e
     out=$(cat "$stdout_log")
+
+    # On crash/hang, preserve stderr in the run folder for diagnosis.
+    # Spec Section 11 makes wind-down failure handling depend on this evidence.
+    if [ "$code" -ne 0 ]; then
+        cp "$stderr_log" "$RUN_DIR/9-sessions/$(printf '%03d' "$session_num")-stderr.txt"
+    fi
+
     rm -f "$stdout_log" "$stderr_log"
+
+    # Exit code 125 from the watchdog signals an infrastructure failure
+    # (inotifywait could not start). This is not a Cat A/B/C session crash
+    # — the orchestrator itself cannot run safely, so bail without writing
+    # session JSON or incrementing crash_count.
+    if [ "$code" -eq 125 ]; then
+        echo "Orchestrator infrastructure failure (inotifywait) — cannot continue safely" >&2
+        exit 3
+    fi
 
     ended_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
