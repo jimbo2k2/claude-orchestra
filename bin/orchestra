@@ -152,14 +152,16 @@ cmd_run() {
     echo "  Run dir:  $wt_run_dir"
     echo "  Attach:   tmux attach -t $tmux_name"
 
-    tmux new-session -d -s "$tmux_name" \
-        "cd '$worktree_dir' && \
-         RUN_DIR='$wt_run_dir' \
-         WORKTREE_DIR='$worktree_dir' \
-         RUN_TS='$run_ts' \
-         RUN_BRANCH='$run_branch' \
-         BASE_BRANCH='$base_branch' \
-         bash '$orch/runtime/bin/orchestrator.sh'"
+    # Use tmux -e for env passing and -c for cwd to avoid building a shell
+    # command-string with interpolated quotes (no injection vector even if
+    # config values contain shell metacharacters).
+    tmux new-session -d -s "$tmux_name" -c "$worktree_dir" \
+        -e "RUN_DIR=$wt_run_dir" \
+        -e "WORKTREE_DIR=$worktree_dir" \
+        -e "RUN_TS=$run_ts" \
+        -e "RUN_BRANCH=$run_branch" \
+        -e "BASE_BRANCH=$base_branch" \
+        bash "$orch/runtime/bin/orchestrator.sh"
 }
 cmd_status() { die "status not yet implemented (Phase 15)"; }
 cmd_test()   { die "test not yet implemented (Phase 11)"; }
