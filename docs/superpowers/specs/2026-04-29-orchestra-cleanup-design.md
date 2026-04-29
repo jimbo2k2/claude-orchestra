@@ -192,7 +192,8 @@ lib/config.sh              # config reader (now parses CONFIG.md)
 install.sh                 # bootstrap into a project
 templates/
   ├── CONFIG.md            # markdown-formatted runtime config (caps signals editable)
-  └── OBJECTIVE.md         # placeholder run brief
+  ├── OBJECTIVE.md         # placeholder run brief
+  └── orchestra-CLAUDE.md  # agent-facing guidance (setup, invocation, run prep)
 examples/
   └── smoke-test/          # minimal scaffolded project for `orchestra test`
 docs/
@@ -212,7 +213,8 @@ MIGRATION.md               # Claude-readable migration prompt (Section 14)
 - `templates/governance/` (orchestra no longer scaffolds parent governance)
 - `templates/test/` (consolidated into `examples/smoke-test/`)
 - `.orchestra/test/` at repo root (consolidated into `examples/smoke-test/`)
-- `templates/CLAUDE.md`, `templates/CLAUDE-workflow.md`, `templates/orchestra-CLAUDE.md`
+- `templates/CLAUDE.md`, `templates/CLAUDE-workflow.md` (project-CLAUDE.md scaffolding — orchestra no longer touches parent project's CLAUDE.md)
+- Old `templates/orchestra-CLAUDE.md` content (autonomous-session rules, governance enforcement) — replaced with new agent-facing guidance focused on setup/invocation/run prep (see Section 9)
 - `templates/DEVELOPMENT-PROTOCOL.md`
 - `templates/standing-ac.md`
 - `templates/toolchain.md`
@@ -227,6 +229,7 @@ MIGRATION.md               # Claude-readable migration prompt (Section 14)
 
 ```
 .orchestra/
+├── CLAUDE.md             # agent-facing guidance for orchestra setup/invocation/run prep
 ├── CONFIG.md             # user-editable runtime config (caps, markdown)
 ├── OBJECTIVE.md          # user-editable run brief (prepared with Claude pre-run)
 ├── runs/                 # run data
@@ -241,7 +244,21 @@ MIGRATION.md               # Claude-readable migration prompt (Section 14)
         └── config.sh
 ```
 
-User sees **two files at `.orchestra/`** (`CONFIG.md` and `OBJECTIVE.md`) plus two subfolders (`runs/` for output, `runtime/` for internals). Clear separation between user-editable and orchestra-internal.
+User sees **three files at `.orchestra/`** (`CLAUDE.md`, `CONFIG.md`, `OBJECTIVE.md`) plus two subfolders (`runs/` for output, `runtime/` for internals).
+
+### What `.orchestra/CLAUDE.md` is for
+
+This file is read by any **interactive** Claude session running in the project — picked up automatically via the standard CLAUDE.md cascading discovery. It's not for autonomous run sessions (those operate inside the worktree under parent CLAUDE.md hierarchy). Audience: a Claude that the user is asking to "set up orchestra", "prepare an objective for the next run", "kick off orchestra", "show me what the last run did", "help me migrate an old install", etc.
+
+Contents (template at `templates/orchestra-CLAUDE.md`):
+- One-paragraph overview of what orchestra is and the run/session vocabulary
+- How to invoke: `.orchestra/runtime/bin/orchestra run` / `status` / `test`, suggested alias setup
+- How to prepare `OBJECTIVE.md` — what makes a good brief, expected shape (free-form markdown referencing specs/plans), commit-before-run requirement
+- How to read run output — pointer to numbered files in `.orchestra/runs/<run>/` and what each contains
+- Wind-down behaviour summary — what happens at end of run, where output goes, what to do with `WIND-DOWN-FAILED` and `BLOCKED` markers
+- Pointer to `MIGRATION.md` for old-orchestra-install handling
+
+This file is orchestra-shipped. Edits by the user persist (init won't overwrite if it exists), but the canonical version lives in the templates.
 
 No `.claude/settings.json` is created or required. No `hooks/` directory.
 
@@ -401,7 +418,8 @@ Steps:
 6. Copy `lib/config.sh` → `.orchestra/runtime/lib/config.sh`.
 7. Copy `templates/CONFIG.md` → `.orchestra/CONFIG.md` (only if doesn't exist).
 8. Copy `templates/OBJECTIVE.md` → `.orchestra/OBJECTIVE.md` (only if doesn't exist).
-9. Print next-steps message.
+9. Copy `templates/orchestra-CLAUDE.md` → `.orchestra/CLAUDE.md` (only if doesn't exist).
+10. Print next-steps message.
 
 **Removed:** governance directory creation, settings.json, CLAUDE.md scaffolding, DEVELOPMENT-PROTOCOL, toolchain.md, standing-ac.md, HANDOVER.md, INBOX.md, README.md, auto-`git init`. None of these are orchestra's business.
 
@@ -473,6 +491,7 @@ Instead: ship `MIGRATION.md` at the repo root containing a Claude-readable promp
    - Rename `.orchestra/sessions/` → `.orchestra/runs/`
    - Convert `.orchestra/config` (bash) → `.orchestra/CONFIG.md` (markdown), translating each key. Keys dropped from the new model (TODO_FILE, DECISIONS_FILE, CHANGELOG_FILE, DEVELOPMENT_PROTOCOL, TOOLCHAIN_FILE, TASKS, TMUX_SESSION) are noted to the user but not carried over.
    - Move `.orchestra/HANDOVER.md` and `.orchestra/INBOX.md` (project-level) to a backup location; new model has these per-run only.
+   - **Install `.orchestra/CLAUDE.md`** (new file in this version) from the template. If the user's existing `.orchestra/` has a `CLAUDE.md` from the old orchestra (pre-strip-back), back it up to `<existing>.bak` and install the new agent-facing version — old version was about in-session governance enforcement which is no longer orchestra's concern.
    - **Per-run file renames inside any in-flight or recent run folders:**
      - `tasks.md` → `3-TODO.md`
      - `log.md` is split by content type when ingesting: decisions go to `4-DECISIONS.md`, changelog entries to `5-CHANGELOG.md`, free-form notes/findings/parked issues to `7-SUMMARY.md`. The new model has no single "log" file — split is done by Claude using judgement.
