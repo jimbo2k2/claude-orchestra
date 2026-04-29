@@ -88,7 +88,7 @@ The wind-down agent maps each rolling file to whatever shape the parent project 
 
 ## 6. Wind-Down
 
-When the agent emits `COMPLETE`, the orchestrator spawns **one additional Claude session** (separate from the working sessions, exempt from `MAX_SESSIONS`) whose purpose is **ingesting run governance into the parent project**. Wind-down does **not** fire on `HANDOVER` (more work remains) or `BLOCKED` (Section 11.5 — run is parked for human resolution).
+When the agent emits `COMPLETE`, the orchestrator spawns **one additional Claude session** (separate from the working sessions, exempt from `MAX_SESSIONS`) whose purpose is **ingesting run governance into the parent project**. Wind-down does **not** fire on `HANDOVER` (more work remains) or `BLOCKED` (Section 11 "Exit signals" — run is parked for human resolution).
 
 ### 6.1 Lock acquisition (orchestrator-owned)
 
@@ -154,12 +154,12 @@ The agent receives a wind-down prompt that constrains it to the following contra
 
 **Failure handling — ingestion ambiguity:** If the agent cannot determine where to ingest a given run-file (parent shape ambiguous), it logs the skip in `7-SUMMARY.md`'s wind-down block and proceeds with the next file. Skipped ingestion is preferable to wrong ingestion.
 
-**Failure handling — unresolvable merge conflict or push rejection:** Agent emits `BLOCKED` with conflict/push-failure details written to `6-HANDOVER.md`. **Important — the BLOCKED enumeration shape is different in wind-down context.** Section 11.5 normally requires a "remaining work and dependency analysis" listing each subtask. During wind-down there are no remaining subtasks — the only "remaining work" is the merge itself. So `6-HANDOVER.md` for wind-down BLOCKED must instead include:
+**Failure handling — unresolvable merge conflict or push rejection:** Agent emits `BLOCKED` with conflict/push-failure details written to `6-HANDOVER.md`. **Important — the BLOCKED enumeration shape is different in wind-down context.** Section 11 "Exit signals" normally requires a "remaining work and dependency analysis" listing each subtask. During wind-down there are no remaining subtasks — the only "remaining work" is the merge itself. So `6-HANDOVER.md` for wind-down BLOCKED must instead include:
 - Files in conflict (paths + a brief description per file)
 - The current merge state (`git status` excerpt showing conflict markers)
 - What manual resolution looks like (e.g. "after resolving, run `git add . && git commit && git push origin <BASE_BRANCH>`")
 
-Orchestrator handles wind-down BLOCKED via the same path as wind-down crash (Section 6.4), not via Section 11.5's regular BLOCKED handling — see Section 6.4.
+Orchestrator handles wind-down BLOCKED via the same path as wind-down crash (Section 6.4), not via Section 11's regular BLOCKED handling — see Section 6.4.
 
 After successful merge sequence: agent exits with `COMPLETE`. Orchestrator (still holding lock until trap fires) moves the run folder to `.orchestra/runs/archive/<run-timestamp>/` as the post-wind-down step.
 
@@ -171,7 +171,7 @@ Wind-down can fail four ways:
 - **Category C** during wind-down (hang)
 - **`BLOCKED` exit during wind-down** (agent could not resolve merge conflicts or push rejection — see Section 6.3 failure handling)
 
-All four route through this single failure path (NOT through Section 11.5's regular `BLOCKED` handling — wind-down BLOCKED's recovery shape is "manual merge needed", which mirrors the crash recovery shape):
+All four route through this single failure path (NOT through Section 11's regular `BLOCKED` handling — wind-down BLOCKED's recovery shape is "manual merge needed", which mirrors the crash recovery shape):
 
 1. Orchestrator detects the failure (non-zero exit, hang, silent exit, or `BLOCKED` exit signal during wind-down).
 2. Lock-release trap fires; `.wind-down.lock` removed.
@@ -530,7 +530,7 @@ The prompt content lives in `MIGRATION.md`. It is detailed enough that Claude ca
 
 The runtime should be **rewritten cleanly**, not adapted in place. Reasons:
 - The architectural shift is large (governance paths gone, per-run numbered layout new, wind-down concept new, BLOCKED semantics rebuilt, crash categories rebuilt).
-- Current `bin/orchestrator.sh` is 39KB with deeply interleaved concerns (TODO scanning, task branching, governance scaffolding) — most of which we're dropping.
+- Current `bin/orchestra` (28KB) and `bin/orchestrator.sh` (39KB) together carry ~68KB of layered legacy with deeply interleaved concerns (TODO scanning, task branching, governance scaffolding) — most of which we're dropping.
 - Adapting in place leaves dead-code paths and risks bugs from incomplete edits.
 - The current code is mid-evolution (recent session-scoped governance rewrite); compounding more edits accelerates entropy.
 
@@ -542,14 +542,14 @@ The runtime should be **rewritten cleanly**, not adapted in place. Reasons:
 - `templates/` — fresh CONFIG.md, OBJECTIVE.md, orchestra-CLAUDE.md
 
 **What to cherry-pick from the existing repo** (proven idioms; reference paths shown for the implementer):
-- **Tmux launch pattern** — `bin/orchestrator.sh` `tmux new-session -d -s ...` invocation. Reuse the cd-into-project + tmux-detached pattern. Adapt to the new tmux-name format (Section 7).
-- **Worktree creation + branch setup** — `bin/orchestrator.sh:540-560` (current `git worktree add` flow). Reuse the worktree dir creation, branch tracking. Adapt to the new run-folder layout and the atomic-mkdir gate (Section 7).
-- **Quota pacing** — `bin/orchestrator.sh` quota polling + threshold + cooldown logic. Reuse verbatim (the keys `QUOTA_PACING`, `QUOTA_THRESHOLD`, `QUOTA_POLL_INTERVAL`, `COOLDOWN_SECONDS` survive into new CONFIG.md).
+- **Tmux launch pattern** — `bin/orchestra:327` (`tmux new-session -d -s ...` invocation). Reuse the cd-into-project + tmux-detached pattern. Adapt to the new tmux-name format (Section 7).
+- **Tmux-name conflict pre-flight** — `bin/orchestra:317` (`tmux has-session -t` check). Reuse the conflict-detect + bail pattern.
+- **Worktree creation + branch setup** — `bin/orchestrator.sh:535` (`git worktree add "$WORKTREE_DIR" "$SESSION_BRANCH"`). Reuse the worktree dir creation, branch tracking. Adapt to the new run-folder layout and the atomic-mkdir gate (Section 7).
+- **Quota pacing** — `bin/orchestrator.sh` quota polling + threshold + cooldown logic (search for `QUOTA_PACING`). Reuse verbatim (the keys `QUOTA_PACING`, `QUOTA_THRESHOLD`, `QUOTA_POLL_INTERVAL`, `COOLDOWN_SECONDS` survive into new CONFIG.md).
 - **Session JSON log structure** — current orchestrator writes `9-sessions/NNN.json` files with rate-limit events, exit signal, session metadata. Reuse the schema; new orchestrator writes them to the new path.
 - **Crash counter mechanics** — increment-on-crash, reset-on-success pattern. Adapt to the new categories A/B/C/D/E (current code only has A in effect).
-- **Recovery prompt prepending pattern** — `bin/orchestrator.sh` `RECOVERY_PROMPT` heredoc + damage-assessment preamble. Directly useful for new Categories D and E. Reshape the preamble for the new (much narrower) damage cases (uncommitted-changes-on-COMPLETE; wind-down crash).
-- **Tmux-name conflict pre-flight** — current orchestrator's `tmux has-session` check pattern.
-- **Lockfile `set -C` idiom** — if any current code uses noclobber atomic file creation, reference it. Otherwise this is straightforward.
+- **Recovery prompt prepending pattern** — `bin/orchestrator.sh` `RECOVERY_PROMPT` heredoc + damage-assessment preamble (around line 383). Directly useful for new Categories D and E. Reshape the preamble for the new (much narrower) damage cases (uncommitted-changes-on-COMPLETE; wind-down crash).
+- **Lockfile `set -C` idiom** — not in current codebase; implement fresh per Section 6.1.
 
 **What NOT to cherry-pick** (deliberately dropped):
 - Anything reading `TODO_FILE`/`DECISIONS_FILE`/`CHANGELOG_FILE` config keys
@@ -575,7 +575,7 @@ The runtime should be **rewritten cleanly**, not adapted in place. Reasons:
 
 Key decisions are documented inline in the relevant sections. This index points to them rather than restating:
 
-- Wind-down exempt from `MAX_SESSIONS`; only `COMPLETE` triggers wind-down — Section 6 opening, Section 11.5
+- Wind-down exempt from `MAX_SESSIONS`; only `COMPLETE` triggers wind-down — Section 6 opening, Section 11 "Exit signals"
 - Crash counter rules + reset semantics — Section 11 "Crash counter rules"
 - No auto `git init` in `orchestra init` — Section 12 step 2
 - No `orchestra migrate` subcommand; replaced by `MIGRATION.md` — Section 14
