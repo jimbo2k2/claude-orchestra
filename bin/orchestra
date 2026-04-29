@@ -250,10 +250,49 @@ smoke_assert_with_governance() {
     [ "$(cat "$wt/file-b.txt" 2>/dev/null)" = "beta" ]  || die "ASSERT FAIL: file-b.txt"
 }
 
+smoke_assert_with_conflict() {
+    local tmpdir="$1"
+    local wt archive
+    wt=$(find "$tmpdir/wt" -mindepth 1 -maxdepth 1 -type d -name 'run-*' -print -quit 2>/dev/null)
+    [ -n "$wt" ] || die "ASSERT FAIL: no worktree found"
+
+    # 7-SUMMARY.md lives in the archived run folder. smoke_assert_common
+    # already verified its existence; re-locate here.
+    archive=$(find "$tmpdir/wt" -mindepth 5 -maxdepth 5 -type d -path '*/runs/archive/*' -print -quit 2>/dev/null)
+    [ -n "$archive" ] || die "ASSERT FAIL: no archived run found"
+
+    # Conflict surfaced in 7-SUMMARY.md per spec Section 6.3 step 4a schema.
+    local summary="$archive/7-SUMMARY.md"
+    grep -q "Potential governance conflicts" "$summary" \
+        || die "ASSERT FAIL: 7-SUMMARY.md missing 'Potential governance conflicts' subsection"
+    grep -qE '###[[:space:]]+Conflict' "$summary" \
+        || die "ASSERT FAIL: 7-SUMMARY.md has no '### Conflict' entry"
+    grep -qE 'Source:.*4-DECISIONS' "$summary" \
+        || die "ASSERT FAIL: conflict Source not labelled 4-DECISIONS.md"
+    grep -qE 'Target:.*DECISIONS\.md' "$summary" \
+        || die "ASSERT FAIL: conflict Target not labelled DECISIONS.md"
+
+    # Append-only invariant: original SQLite decision still present, new
+    # Postgres decision appended.
+    grep -q '\[fixture-original\] D001.*SQLite' "$wt/DECISIONS.md" \
+        || die "ASSERT FAIL: original [fixture-original] D001 (SQLite) lost from DECISIONS.md"
+    grep -qE '\[smoke-decision\].*Postgres' "$wt/DECISIONS.md" \
+        || die "ASSERT FAIL: new [smoke-decision] (Postgres) missing from DECISIONS.md"
+
+    # Wind-down ingestion commit for DECISIONS still landed on the base.
+    (
+        cd "$wt"
+        git log --grep "wind-down: ingest 4-DECISIONS.md →" --format=%H | grep -q . \
+            || die "ASSERT FAIL: missing DECISIONS ingest commit"
+    )
+}
+
 cmd_test() {
     local variant="${1:-empty}"
-    [ "$variant" = "empty" ] || [ "$variant" = "with-governance" ] \
-        || die "Unknown smoke-test variant: $variant (use 'empty' or 'with-governance')"
+    case "$variant" in
+        empty|with-governance|with-conflict) ;;
+        *) die "Unknown smoke-test variant: $variant (use 'empty', 'with-governance', or 'with-conflict')" ;;
+    esac
 
     command -v claude >/dev/null 2>&1 \
         || die "claude CLI not found on PATH; smoke test needs real Claude"
@@ -322,11 +361,11 @@ EOF
     fi
 
     smoke_assert_common "$tmpdir"
-    if [ "$variant" = "empty" ]; then
-        smoke_assert_empty "$tmpdir"
-    else
-        smoke_assert_with_governance "$tmpdir"
-    fi
+    case "$variant" in
+        empty)            smoke_assert_empty "$tmpdir" ;;
+        with-governance)  smoke_assert_with_governance "$tmpdir" ;;
+        with-conflict)    smoke_assert_with_conflict "$tmpdir" ;;
+    esac
 
     echo ""
     echo "Smoke test PASSED ($variant). Tempdir: $tmpdir"
