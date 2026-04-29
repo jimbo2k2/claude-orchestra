@@ -81,32 +81,36 @@ acquire_winddown_lock() {
 }
 
 write_winddown_failed_marker() {
-    local cat="$1" out="$2" handover="$3"
+    # Note: parameter is `category` (not `cat`) — `cat` would shadow the
+    # cat(1) command name we use below to dump the handover.
+    local category="$1" out="$2" handover="$3"
     {
         echo "Failed at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        echo "Category: $cat"
+        echo "Category: $category"
         echo ""
         echo "--- Last 50 lines of session output ---"
         echo "$out" | tail -50
-        if [ "$cat" = "BLOCKED" ] && [ -n "$handover" ] && [ -f "$handover" ]; then
+        if [ "$category" = "BLOCKED" ] && [ -n "$handover" ] && [ -f "$handover" ]; then
             echo ""
             echo "--- Conflict/push-failure details from 6-HANDOVER.md ---"
-            cat "$handover"
+            # Cap handover at 500 lines so a runaway agent producing
+            # megabytes of HANDOVER doesn't bloat the marker file.
+            head -n 500 "$handover"
         fi
     } > "$RUN_DIR/WIND-DOWN-FAILED"
 }
 
 print_winddown_recovery() {
-    local cat="$1"
+    local category="$1"
     cat <<EOF >&2
 
-WIND-DOWN FAILED ($cat). Run preserved at:
+WIND-DOWN FAILED ($category). Run preserved at:
   $RUN_DIR
 
 Run branch: $RUN_BRANCH
 
 EOF
-    case "$cat" in
+    case "$category" in
         A|B|C)
             cat <<EOF >&2
 Recovery (the merge step did not complete):
@@ -396,6 +400,20 @@ EOF
                 run_session_with_watchdog "$wd_prompt" "$wd_stdout_log" "$wd_stderr_log"
                 wd_code=$?
                 set -e
+
+                # Mirror the working-session 125 early-bail (above, after the
+                # main run_session_with_watchdog call). 125 means inotifywait
+                # could not start — an A/B/C category and "git merge --ff-only"
+                # recovery recipe would be misleading. Preserve stderr, clean
+                # the temp logs explicitly (we bail before the shared cleanup
+                # below), and exit 3 to match the working-session contract.
+                if [ "$wd_code" -eq 125 ]; then
+                    cp "$wd_stderr_log" "$RUN_DIR/wind-down-stderr.txt" 2>/dev/null || true
+                    rm -f "$wd_stdout_log" "$wd_stderr_log"
+                    echo "Wind-down infrastructure failure (inotifywait) — cannot diagnose further" >&2
+                    exit 3
+                fi
+
                 wd_out=$(cat "$wd_stdout_log")
 
                 if [ "$wd_code" -ne 0 ]; then

@@ -156,6 +156,14 @@ Format: each item lists the **phase**, the **file:line** where applicable, and t
 
 ---
 
+## From Phase 9 — Wind-down failure handling
+
+- [ ] **`bin/orchestrator.sh:90` — `echo "$out" | tail -50` safe under bash.** Reviewer flagged this for a check; under bash with `set -o pipefail`, a SIGPIPE on `echo` could in theory propagate. In practice `tail -50` reads its input fully (no early close) so `echo` never receives SIGPIPE; the pipeline is safe as-written. Recorded so it isn't re-flagged.
+
+- [ ] **`tests/test_winddown_failure.sh` — A/B/C paths are not exercised end-to-end.** The current test covers BLOCKED routing only; A (non-zero exit, non-124), B (clean exit but missing signal), and C (124 watchdog timeout) are exercised indirectly via the working-session path tests but not asserted at the wind-down call site. Reasonable tradeoff for now; revisit when Phase 11's smoke-test driver lands and can drive synthetic wind-down failures.
+
+---
+
 ## How to apply
 
 At Phase 19 (branch wrap-up):
