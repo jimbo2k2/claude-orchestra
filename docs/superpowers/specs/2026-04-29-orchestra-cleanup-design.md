@@ -41,7 +41,13 @@
 
 The user prepares `.orchestra/OBJECTIVE.md` interactively with Claude before invocation. Free-form markdown — typically a short brief that points at one or more spec/plan files. Orchestra treats it as opaque text and feeds it into the first session prompt. No schema.
 
-`orchestra run` atomically snapshots `OBJECTIVE.md` at run-start (`cp` to a temp path, then `mv` into the new run folder, then read from the snapshot only). Mid-run edits to the source don't drift the in-flight run, and a user editing `OBJECTIVE.md` in the same instant `orchestra run` is invoked sees a deterministic point-in-time copy. The snapshot becomes `<worktree>/.orchestra/runs/<run>/2-OBJECTIVE.md`.
+**Snapshot mechanism — git does it.** `OBJECTIVE.md` is tracked in the project repo. When `orchestra run` creates the worktree from `BASE_BRANCH`, git checkout produces `<worktree>/.orchestra/OBJECTIVE.md` containing exactly what was committed to that branch — a natural point-in-time snapshot. No cross-tree copy needed.
+
+Inside the worktree, the orchestrator copies `<worktree>/.orchestra/OBJECTIVE.md` → `<worktree>/.orchestra/runs/<run>/2-OBJECTIVE.md` so the run folder is self-contained (the objective travels with the archived run for later review).
+
+**Preflight check:** if `<worktree>/.orchestra/OBJECTIVE.md` doesn't exist after worktree creation (user forgot to commit), orchestrator errors out with: "OBJECTIVE.md not found in worktree — commit it to `<BASE_BRANCH>` and retry."
+
+User must commit `OBJECTIVE.md` to `BASE_BRANCH` before `orchestra run` to have it picked up. Same applies to `CONFIG.md` — its committed state is what the run uses; uncommitted edits don't take effect. This is desirable: runs are deterministic against branch state.
 
 User workflow is **sequential firing** — one objective file at a time, prepared between runs. Multiple runs may overlap in execution but they are not queued or fired simultaneously.
 
@@ -89,10 +95,12 @@ When the agent emits `COMPLETE`, the orchestrator spawns **one additional Claude
 The orchestrator — not the agent — owns the lock's *creation and release*. The agent is the one running inside the locked critical section but doesn't touch the lock file directly. Wrapping the wind-down spawn:
 
 1. Acquire `.orchestra/runs/.wind-down.lock`:
-   - Atomic create via `set -C; printf '%d\n%d\n' $$ "$(date +%s)" > .wind-down.lock`. PID on line 1, epoch start-time on line 2.
+   - Atomic create via `set -C; printf '%d\n%s\n' $$ "$(awk '{print $22}' /proc/self/stat)" > .wind-down.lock`. PID on line 1, **process start-time in clock ticks since boot** on line 2 (matching `/proc/<pid>/stat` field 22 units).
    - On `EEXIST`: read existing lock; if PID is alive (`kill -0 <pid>`), poll with exponential backoff (start 30s, cap 300s, no hard timeout — wind-downs can take a while).
-   - If PID is dead: lock is stale. Verify by checking process start-time (Linux: `/proc/<pid>/stat` field 22) doesn't match the lock's recorded start-time. Stale → remove and re-acquire.
+   - If PID is dead: lock is stale (maybe — could be PID recycled). Verify by reading `/proc/<pid>/stat` field 22 for the live PID; if it matches the lock's recorded value, the original orchestrator is somehow alive without responding to `kill -0` (unlikely but defensive — wait); if it doesn't match, this is a recycled PID and the lock is stale → remove and re-acquire. If `/proc/<pid>/stat` doesn't exist, the PID is gone → stale → remove and re-acquire.
 2. **Trap discipline.** Immediately after acquiring the lock, install: `trap 'rm -f .orchestra/runs/.wind-down.lock' EXIT INT TERM`. This guarantees release on Ctrl-C, kill, or any exit path. Without this, `rm` at step 4 is unreliable.
+
+   **`EXIT INT TERM` is reserved for the lock trap** — orchestra commits to not installing competing handlers on these signals. Section 7's setup-cleanup trap uses `ERR` only, by design (see Section 7).
 3. Spawn the wind-down Claude session, passing it the run folder path and the wind-down prompt (Section 6.3).
 4. On session exit (any reason): trap fires; lock removed.
 
@@ -110,7 +118,7 @@ The merge sequence is part of the agent contract (Section 6.3 MUST clauses).
 The agent receives a wind-down prompt that constrains it to the following contract. Orchestra's runtime does not enforce these — the prompt does, and the contract sets the boundary the agent operates within:
 
 **MUST (in order):**
-1. **Discover parent governance shape.** Read parent project's `CLAUDE.md` hierarchy first — if it names governance file paths (e.g. "decisions live in `docs/decisions/`"), prefer those. Otherwise fall back to filename-pattern matching at the project root (`TODO*`, `DECISIONS*`, `CHANGELOG*`, `HISTORY*`, `NEWS*`). Record the mapping decisions made in `7-SUMMARY.md`'s wind-down block.
+1. **Discover parent governance shape.** Read parent project's `CLAUDE.md` hierarchy first — if it names governance file paths (e.g. "decisions live in `docs/decisions/`"), prefer those. Otherwise fall back to filename-pattern matching at the project root and `docs/` top-level only (`TODO*`, `DECISIONS*`, `CHANGELOG*`, `HISTORY*`, `NEWS*`). No deeper recursion. Record the mapping decisions made in `7-SUMMARY.md`'s wind-down block.
 2. **Ingest run governance into parent shape:**
    - `3-TODO.md` → parent TODO equivalent (or skip if parent has none)
    - `4-DECISIONS.md` → parent DECISIONS equivalent (or skip if parent has none)
@@ -118,12 +126,13 @@ The agent receives a wind-down prompt that constrains it to the following contra
    - `7-SUMMARY.md` and `2-OBJECTIVE.md` are NOT ingested — they remain in the archived run folder for human review.
 3. **Per-file commit on the run-branch** with message `wind-down: ingest <run-file> → <parent-file>`. Separate commits per ingested file make per-file review possible.
 4. **Append-only against parent files.** Existing parent content is preserved verbatim — new entries appended at the bottom or the project's documented insertion point.
+4a. **Surface conflicts in the run summary.** Before appending each new entry, the agent scans the existing parent file for entries that may semantically conflict with the new one (same key/topic but contradictory status, decision reversal, superseded TODO entries, etc.). Append-only is preserved — agent does NOT modify the existing entry — but each potential conflict is recorded in `7-SUMMARY.md`'s wind-down block under a "Potential governance conflicts" subsection with: source run-file + entry, target parent-file + conflicting line/section, the agent's reading of why they conflict, and a recommended resolution for human review. This avoids silent documentation debt where main accumulates contradictory entries no one notices.
 5. **Run the merge sequence** to integrate the run branch into the base branch:
    - `git checkout <BASE_BRANCH>`
    - `git pull origin <BASE_BRANCH>` (resolve any conflicts inline using session context)
    - If `<BASE_BRANCH>` is an ancestor of run-branch → `git merge --ff-only <run-branch>`
-   - Otherwise → checkout run-branch, `git rebase <BASE_BRANCH>` (resolve conflicts), checkout base, `git merge --ff-only <run-branch>`
-   - `git push origin <BASE_BRANCH>`
+   - Otherwise → checkout run-branch, `git rebase <BASE_BRANCH>` (resolve conflicts), checkout base, `git merge --ff-only <run-branch>`. Note: rebase rewrites the per-file ingestion commits onto the new base — they're reparented, not lost; reviewers auditing run-branch history post-rebase see the rewritten commits.
+   - `git push origin <BASE_BRANCH>`. **On rejection (non-FF — remote moved between pull and push):** re-pull the base branch, redo the merge/rebase as above, retry push. Up to 3 attempts. On 3rd rejection or any non-conflict push failure (auth, network, pre-push hook), invoke wind-down failure path (Section 6.4) — same recovery shape as conflict-BLOCKED.
 
 **MUST NOT:**
 - Delete or rewrite existing parent governance content.
@@ -131,28 +140,43 @@ The agent receives a wind-down prompt that constrains it to the following contra
 - Touch any file outside parent governance + the run folder.
 - Skip the merge sequence — successful ingestion without merge is a half-completed wind-down.
 
-**Failure handling:** If the agent cannot determine where to ingest a given run-file (parent shape ambiguous), it logs the skip in `7-SUMMARY.md`'s wind-down block and proceeds with the next file. Skipped ingestion is preferable to wrong ingestion. If merge conflicts cannot be resolved with available session context, agent emits `BLOCKED` with the conflict details — wind-down lock is released by orchestrator's trap; user resolves manually.
+**Failure handling — ingestion ambiguity:** If the agent cannot determine where to ingest a given run-file (parent shape ambiguous), it logs the skip in `7-SUMMARY.md`'s wind-down block and proceeds with the next file. Skipped ingestion is preferable to wrong ingestion.
+
+**Failure handling — unresolvable merge conflict or push rejection:** Agent emits `BLOCKED` with conflict/push-failure details written to `6-HANDOVER.md`. **Important — the BLOCKED enumeration shape is different in wind-down context.** Section 11.5 normally requires a "remaining work and dependency analysis" listing each subtask. During wind-down there are no remaining subtasks — the only "remaining work" is the merge itself. So `6-HANDOVER.md` for wind-down BLOCKED must instead include:
+- Files in conflict (paths + a brief description per file)
+- The current merge state (`git status` excerpt showing conflict markers)
+- What manual resolution looks like (e.g. "after resolving, run `git add . && git commit && git push origin <BASE_BRANCH>`")
+
+Orchestrator handles wind-down BLOCKED via the same path as wind-down crash (Section 6.4), not via Section 11.5's regular BLOCKED handling — see Section 6.4.
 
 After successful merge sequence: agent exits with `COMPLETE`. Orchestrator (still holding lock until trap fires) moves the run folder to `.orchestra/runs/archive/<run-timestamp>/` as the post-wind-down step.
 
-### 6.4 Wind-down crash handling
+### 6.4 Wind-down failure handling
 
-If the wind-down session itself crashes (Section 11 categories A/B/C during wind-down):
+Wind-down can fail four ways:
+- **Category A** during wind-down (hard exit)
+- **Category B** during wind-down (silent exit)
+- **Category C** during wind-down (hang)
+- **`BLOCKED` exit during wind-down** (agent could not resolve merge conflicts or push rejection — see Section 6.3 failure handling)
 
-1. Orchestrator catches non-zero exit / hang / silent exit.
-2. Release `.wind-down.lock`.
-3. Write `.orchestra/runs/<run>/WIND-DOWN-FAILED` with: timestamp, crash category, last 50 lines of session output.
-4. Exit orchestrator with explicit message including the run-branch name and copy-paste-able recovery commands (`git checkout <base>; git merge --ff-only <run-branch>; git push`).
-5. The run folder is NOT moved to archive — its presence at `.orchestra/runs/<run>/` indicates an unfinished wind-down for the user to inspect.
+All four route through this single failure path (NOT through Section 11.5's regular `BLOCKED` handling — wind-down BLOCKED's recovery shape is "manual merge needed", which mirrors the crash recovery shape):
 
-Wind-down crashes do NOT auto-retry. The user decides.
+1. Orchestrator detects the failure (non-zero exit, hang, silent exit, or `BLOCKED` exit signal during wind-down).
+2. Lock-release trap fires; `.wind-down.lock` removed.
+3. Write `.orchestra/runs/<run>/WIND-DOWN-FAILED` with: timestamp, failure category (A/B/C/BLOCKED), last 50 lines of session output, and (for BLOCKED) the conflict/push-failure details extracted from `6-HANDOVER.md`.
+4. Exit orchestrator with explicit message including the run-branch name, the failure category, and copy-paste-able recovery commands. Recovery shape varies by category:
+   - **A/B/C:** `cd <worktree> && git checkout <BASE_BRANCH> && git merge --ff-only <run-branch> && git push origin <BASE_BRANCH>` (the wind-down didn't reach the merge step — base may not even need conflict resolution)
+   - **BLOCKED:** `cd <worktree> && cat .orchestra/runs/<run>/6-HANDOVER.md` then resolve conflicts manually using the file/line guidance there, finishing with `git add . && git commit && git push origin <BASE_BRANCH>`
+5. The run folder is NOT moved to archive — its presence at `.orchestra/runs/<run>/` with a `WIND-DOWN-FAILED` marker indicates an unfinished wind-down for the user to inspect.
+
+Wind-down failures do NOT auto-retry. The user decides whether to resolve manually, abandon the run-branch, or re-run a fresh `orchestra run` referencing the partial work.
 
 ## 7. Concurrency
 
 User fires runs sequentially but they may overlap in execution.
 
 - **Run-folder atomic mkdir is the canonical uniqueness gate.** At run start, `mkdir .orchestra/runs/<run-timestamp>/` runs with no `-p`. On `EEXIST` (two runs starting in the same second), the second run sleeps 1s and retries with a fresh timestamp; bails after 3 retries with an explicit error. This is authoritative — tmux name and worktree path collisions become non-issues because they're derived from the same timestamp that just succeeded the mkdir.
-- **Cleanup on downstream failure.** Immediately after the mkdir succeeds, the orchestrator installs `trap 'rm -rf .orchestra/runs/<run-timestamp>/' ERR` covering subsequent setup steps (worktree creation, tmux launch, etc.). If any step fails before the orchestrator hands off to the session loop, the trap removes the orphaned run folder so it doesn't appear as "stale" in `orchestra status`. Once the session loop is live, the trap is cleared (the run folder now legitimately persists).
+- **Cleanup on downstream failure.** Immediately after the mkdir succeeds, the orchestrator installs `trap 'rm -rf .orchestra/runs/<run-timestamp>/' ERR` covering subsequent setup steps (worktree creation, tmux launch, etc.). If any step fails before the orchestrator hands off to the session loop, the trap removes the orphaned run folder so it doesn't appear as "stale" in `orchestra status`. Once the session loop is live, the trap is cleared via `trap - ERR` (the run folder now legitimately persists). **`ERR` is the only signal the setup trap uses** — the lock trap (Section 6.1) reserves `EXIT INT TERM`, so the two traps are non-overlapping in scope. Setup-cleanup runs at a different orchestrator phase from lock-acquisition; the traps are sequential, not nested.
 - **Tmux session names** — `<TMUX_PREFIX>-<HHMMSS>` (default prefix `orchestra`, e.g. `orchestra-153022`). Conflicts handled by the atomic-mkdir gate above.
 - **Worktree path** — `<WORKTREE_BASE>/run-<HHMMSS>`. Same: gate is upstream.
 - **No project-level lockfile** — dropped. The atomic-mkdir gate is sufficient.
@@ -336,9 +360,10 @@ Hard exit, silent exit, or hang during the wind-down session specifically (Secti
 
 ### Crash counter rules
 
-- Single counter `CRASH_COUNT`; A/B/C all increment it. D does not.
+- Single counter `CRASH_COUNT`; A/B/C all increment it. D does not. E (wind-down crash) doesn't increment either — wind-down failures never auto-retry.
 - `CRASH_COUNT` resets to 0 on any successful session signal (`COMPLETE` or `HANDOVER`). `BLOCKED` does not reset (no further sessions follow regardless).
 - On `CRASH_COUNT >= MAX_CONSECUTIVE_CRASHES`: orchestrator bails with a clear message naming the last crash category. User can purge the worktree and restart, or investigate.
+- The counter is irrelevant once any terminal state fires: `COMPLETE` (→ wind-down), `BLOCKED` (run halts), `MAX_SESSIONS` reached (run halts), or `MAX_CONSECUTIVE_CRASHES` reached (run halts). After that point no further working sessions are spawned.
 
 ### Exit signals
 
@@ -418,12 +443,12 @@ For each fixture, `orchestra test`:
 4. Pre-populated `OBJECTIVE.md` in the fixture defines a trivial multi-step brief (e.g. "create file A with content X, then create file B with content Y; record what you did in your run governance").
 5. Run `orchestra run` with conservative session limits (`MAX_SESSIONS=2`).
 6. Wait for completion (timeout: `SMOKE_TEST_TIMEOUT`, default 900s = 15 min).
-7. Common assertions:
-   - Run folder created at `<tempdir>/.orchestra/runs/<timestamp>/`
-   - Required files exist: `1-INBOX.md`, `2-OBJECTIVE.md`, `3-TODO.md`, `4-DECISIONS.md`, `5-CHANGELOG.md`, `6-HANDOVER.md`, `7-SUMMARY.md`, `9-sessions/`
-   - Agent emitted `COMPLETE`
-   - Expected files A and B exist with expected content
-   - Run was archived under `.orchestra/runs/archive/<timestamp>/`
+7. Common assertions (after wind-down completes; **all run-folder file checks run against the archive path** `<tempdir>/.orchestra/runs/archive/<timestamp>/`, not the live path — by this point the run has been archived):
+   - Archive folder exists at `<tempdir>/.orchestra/runs/archive/<timestamp>/`
+   - Required files exist inside the archive folder: `1-INBOX.md`, `2-OBJECTIVE.md`, `3-TODO.md`, `4-DECISIONS.md`, `5-CHANGELOG.md`, `6-HANDOVER.md`, `7-SUMMARY.md`, `9-sessions/`
+   - Agent emitted `COMPLETE` (visible in last `9-sessions/NNN.json`)
+   - Expected files A and B exist in the worktree with expected content
+   - No active run folder remains at `<tempdir>/.orchestra/runs/<timestamp>/` (i.e. archival succeeded — folder was moved, not copied)
 8. Variant-specific assertions:
    - `empty/`: `find <tempdir> -maxdepth 1 \( -name 'TODO*' -o -name 'DECISIONS*' -o -name 'CHANGELOG*' \)` returns nothing.
    - `with-governance/`: each parent file contains its original `[fixture-original]` entry verbatim, AND its corresponding marker (`[smoke-todo]` in TODO.md, `[smoke-decision]` in DECISIONS.md, `[smoke-changelog]` in CHANGELOG.md), AND none of the OTHER markers (TODO.md must NOT contain `[smoke-decision]` or `[smoke-changelog]`, etc.). The wind-down commits are visible on the base branch with explicit source→destination mapping in messages: `git log --grep 'wind-down: ingest 3-TODO.md → '`, `git log --grep 'wind-down: ingest 4-DECISIONS.md → '`, `git log --grep 'wind-down: ingest 5-CHANGELOG.md → '` each returns exactly one match.
@@ -448,6 +473,10 @@ Instead: ship `MIGRATION.md` at the repo root containing a Claude-readable promp
    - Rename `.orchestra/sessions/` → `.orchestra/runs/`
    - Convert `.orchestra/config` (bash) → `.orchestra/CONFIG.md` (markdown), translating each key. Keys dropped from the new model (TODO_FILE, DECISIONS_FILE, CHANGELOG_FILE, DEVELOPMENT_PROTOCOL, TOOLCHAIN_FILE, TASKS, TMUX_SESSION) are noted to the user but not carried over.
    - Move `.orchestra/HANDOVER.md` and `.orchestra/INBOX.md` (project-level) to a backup location; new model has these per-run only.
+   - **Per-run file renames inside any in-flight or recent run folders:**
+     - `tasks.md` → `3-TODO.md`
+     - `log.md` is split by content type when ingesting: decisions go to `4-DECISIONS.md`, changelog entries to `5-CHANGELOG.md`, free-form notes/findings/parked issues to `7-SUMMARY.md`. The new model has no single "log" file — split is done by Claude using judgement.
+     - Old archived runs under `runs/archive/<NNN-label>/` retain their original layout (don't migrate historical archives).
    - Update orchestra runtime files to the latest version.
 4. Notes to the user that parent project files installed by old orchestra (`DEVELOPMENT-PROTOCOL.md`, the "Multi-Session Autonomous Workflow" section in CLAUDE.md, governance directories like `TODO/`, `Decisions/`, `Changelog/`) are now the user's own — orchestra no longer installs or owns them. User decides whether to keep, modify, or remove them.
 
