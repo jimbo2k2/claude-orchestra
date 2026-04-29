@@ -72,6 +72,34 @@ Format: each item lists the **phase**, the **file:line** where applicable, and t
 
 ---
 
+## From Phase 4 — Run lifecycle scaffold
+
+- [ ] **`tests/test_run_lifecycle.sh` — add a test that actually exercises the ERR-trap cleanup.** Current "setup-failure" test uses `WORKTREE_BASE=/proc/orchestra-cant-write` which fails at `mkdir -p` *before* the gate mkdir or trap install — so the assertion "no orphan run folder" is trivially true regardless of trap correctness. To verify the trap path itself, force a failure between trap install (`bin/orchestra:120`) and trap clear (`bin/orchestra:147`). The cleanest trigger: invalid `BASE_BRANCH` (e.g. `nonexistent-branch`), which makes `git worktree add` fail. Assertion: both project-tree `$orch/runs/<ts>/` is removed AND any partial worktree at `<WORKTREE_BASE>/run-<ts>/` is cleaned up.
+
+- [ ] **`tests/test_run_lifecycle.sh` — `tmux kill-server` in cleanup is too broad.** Would clobber any other tmux sessions on a dev machine. Replace with targeted kill: `tmux ls 2>/dev/null | grep "^orch-test-" | cut -d: -f1 | xargs -I{} tmux kill-session -t {} 2>/dev/null || true`. Or scope by `TMUX_PREFIX` value used in the test fixture.
+
+---
+
+## From Phase 5 — Single-session loop with Category A crash detection
+
+- [ ] **`bin/orchestrator.sh` — config keys read without `validate_config`.** The script re-parses CONFIG.md but does not call `validate_config`. Under `set -u`, a missing required key becomes an "unbound variable" abort with no useful message. Either call `validate_config` here or wrap each required-key read with `${VAR:?missing}`.
+
+- [ ] **`bin/orchestrator.sh` — terminal-exit branches sleep before exit.** COMPLETE and BLOCKED branches `sleep "$COOLDOWN"` *before* `exit` — the cooldown is between-sessions; on terminal exit it's wasted. Move the sleep to fire only when looping back (HANDOVER path).
+
+- [ ] **`bin/orchestrator.sh` — `--thinking-effort` flag unverified against real CLI.** Both tests stub `claude`, so the flag surface is unverified. Worth a one-line confirmation against the real `claude --print` CLI before Phase 11's smoke test.
+
+- [ ] **`bin/orchestrator.sh:88` — pipefail + pipeline makes `$code` non-deterministic.** With `pipefail`, when fake claude crashes the captured `$code` could be 141 (SIGPIPE on `echo`) instead of 1 (claude's real exit). Use a here-string `claude ... <<<"$prompt"` or capture with `out=$(claude ...) || code=$?` so the exit code is unambiguously claude's.
+
+- [ ] **`tests/test_session_loop_hard_exit.sh` — fake claude doesn't drain stdin.** Triggers the SIGPIPE race above. Adding `cat >/dev/null` before `exit 1` (matching `test_session_loop_complete.sh`) would make it deterministic.
+
+- [ ] **`tests/test_session_loop_hard_exit.sh` and `tests/test_session_loop_complete.sh` — trap quoting nit.** `trap "rm -rf $TMP; tmux kill-server 2>/dev/null || true" EXIT` expands `$TMP` at trap-set time. Idiomatic form is single-quoted body: `trap 'rm -rf "$TMP"; tmux kill-server 2>/dev/null || true' EXIT`. Same nit as Phase-1 followup; the broad `tmux kill-server` concern (existing Phase-4 followup) applies to these new files too.
+
+- [ ] **Tests — unused `i` in busy-wait loops.** `for i in $(seq 1 30); do ...` never references `i`. `for _ in $(seq 1 30); do ...` reads more honestly. Applies to both new session-loop tests.
+
+- [ ] **Tests — `ls -d ...*/ | head -1` is non-deterministic with multiple matches.** If two run folders ever exist (e.g. parallel test runs sharing a TMP), `head -1` picks an arbitrary one. Pin to the latest with `ls -1tr | tail -1`, or assert exactly one match exists before picking.
+
+---
+
 ## How to apply
 
 At Phase 19 (branch wrap-up):

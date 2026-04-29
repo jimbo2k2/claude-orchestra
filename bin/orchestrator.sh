@@ -92,8 +92,11 @@ while [ $session_num -lt $MAX_SESSIONS ] && [ $crash_count -lt $MAX_CRASHES ]; d
 
     ended_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-    # Determine exit signal and crash category
-    last_line=$(printf '%s' "$out" | tail -n1 | tr -d '[:space:]')
+    # Determine exit signal and crash category.
+    # Per spec Section 11: parse the final non-empty line of stdout — awk
+    # tracks the last line with any non-blank content so trailing blank
+    # lines don't mask a clean COMPLETE/HANDOVER/BLOCKED.
+    last_line=$(printf '%s' "$out" | awk 'NF{line=$0} END{print line}' | tr -d '[:space:]')
     signal=""
     category=""
 
@@ -106,7 +109,8 @@ while [ $session_num -lt $MAX_SESSIONS ] && [ $crash_count -lt $MAX_CRASHES ]; d
         esac
     fi
 
-    write_session_json "$session_num" "$started_at" "$ended_at" "$code" "$signal" "$category"
+    write_session_json "$session_num" "$started_at" "$ended_at" "$code" "$signal" "$category" \
+        || { echo "ERROR: failed writing session JSON (session $session_num, exit $code)" >&2; exit 2; }
 
     if [ -n "$category" ]; then
         crash_count=$((crash_count + 1))
