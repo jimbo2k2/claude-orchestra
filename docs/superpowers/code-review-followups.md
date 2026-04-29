@@ -86,7 +86,7 @@ Format: each item lists the **phase**, the **file:line** where applicable, and t
 
 - [ ] **`bin/orchestrator.sh` — terminal-exit branches sleep before exit.** COMPLETE and BLOCKED branches `sleep "$COOLDOWN"` *before* `exit` — the cooldown is between-sessions; on terminal exit it's wasted. Move the sleep to fire only when looping back (HANDOVER path).
 
-- [ ] **`bin/orchestrator.sh` — `--thinking-effort` flag unverified against real CLI.** Both tests stub `claude`, so the flag surface is unverified. Worth a one-line confirmation against the real `claude --print` CLI before Phase 11's smoke test.
+- [x] **`bin/orchestrator.sh` — `--thinking-effort` flag unverified against real CLI.** ~~Both tests stub `claude`, so the flag surface is unverified.~~ **Resolved in Phase 11:** real flag is `--effort` (not `--thinking-effort`); fixed in `bin/orchestrator.sh` as part of the Phase 11 commit after the smoke test surfaced "error: unknown option '--thinking-effort'".
 
 - [ ] **`bin/orchestrator.sh:88` — pipefail + pipeline makes `$code` non-deterministic.** With `pipefail`, when fake claude crashes the captured `$code` could be 141 (SIGPIPE on `echo`) instead of 1 (claude's real exit). Use a here-string `claude ... <<<"$prompt"` or capture with `out=$(claude ...) || code=$?` so the exit code is unambiguously claude's.
 

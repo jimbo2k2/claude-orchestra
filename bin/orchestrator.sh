@@ -197,7 +197,7 @@ run_session_with_watchdog() {
     rm -f "$inotify_err"  # drop after startup; main monitoring uses inotify_log only
 
     echo "$prompt" | claude --print --dangerously-skip-permissions \
-        --model "$MODEL" --thinking-effort "$EFFORT" \
+        --model "$MODEL" --effort "$EFFORT" \
         > "$stdout_log" 2> "$stderr_log" &
     local claude_pid=$!
 

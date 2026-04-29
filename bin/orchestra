@@ -165,7 +165,122 @@ cmd_run() {
         bash "$orch/runtime/bin/orchestrator.sh"
 }
 cmd_status() { die "status not yet implemented (Phase 15)"; }
-cmd_test()   { die "test not yet implemented (Phase 11)"; }
+
+smoke_assert_common() {
+    local tmpdir="$1"
+    local archive
+    archive=$(ls -d "$tmpdir"/wt/run-*/.orchestra/runs/archive/* 2>/dev/null | head -1)
+    [ -n "$archive" ] || die "ASSERT FAIL: no archived run found"
+
+    for f in 1-INBOX.md 2-OBJECTIVE.md 3-TODO.md 4-DECISIONS.md 5-CHANGELOG.md \
+             6-HANDOVER.md 7-SUMMARY.md 9-sessions; do
+        [ -e "$archive/$f" ] || die "ASSERT FAIL: missing $f in archive"
+    done
+
+    local active_count
+    active_count=$(ls -d "$tmpdir"/wt/run-*/.orchestra/runs/2* 2>/dev/null | wc -l)
+    [ "$active_count" -eq 0 ] || die "ASSERT FAIL: active run folder remains (should be archived)"
+}
+
+smoke_assert_empty() {
+    local tmpdir="$1"
+    local wt
+    wt=$(ls -d "$tmpdir"/wt/run-* | head -1)
+
+    local found
+    found=$(find "$wt" -maxdepth 1 \( -name 'TODO*' -o -name 'DECISIONS*' -o -name 'CHANGELOG*' \) | wc -l)
+    [ "$found" -eq 0 ] || die "ASSERT FAIL: empty fixture should not have parent governance"
+
+    [ "$(cat "$wt/file-a.txt" 2>/dev/null)" = "alpha" ] || die "ASSERT FAIL: file-a.txt"
+    [ "$(cat "$wt/file-b.txt" 2>/dev/null)" = "beta" ] || die "ASSERT FAIL: file-b.txt"
+}
+
+smoke_assert_with_governance() {
+    die "with-governance assertions are Phase 12"
+}
+
+cmd_test() {
+    local variant="${1:-empty}"
+    [ "$variant" = "empty" ] || [ "$variant" = "with-governance" ] \
+        || die "Unknown smoke-test variant: $variant (use 'empty' or 'with-governance')"
+
+    command -v claude >/dev/null 2>&1 \
+        || die "claude CLI not found on PATH; smoke test needs real Claude"
+
+    local fixture="$SCRIPT_DIR/../examples/smoke-test/$variant"
+    [ -d "$fixture" ] || die "Fixture not found: $fixture"
+
+    local tmpdir
+    tmpdir="${TMPDIR:-/tmp}/orchestra-smoke-$(date -u +%Y%m%d-%H%M%S)-$variant"
+    rm -rf "$tmpdir"
+    mkdir -p "$tmpdir"
+    cp -r "$fixture/." "$tmpdir/"
+
+    cd "$tmpdir"
+    git init -q --initial-branch=master
+
+    # Local bare remote so wind-down's `git push origin master` has a target.
+    # The fixture has no real remote; without this, push fails and the run BLOCKs.
+    local bare="$tmpdir/origin.git"
+    git init -q --bare "$bare"
+    git remote add origin "$bare"
+
+    git -c user.email=smoke@test -c user.name=smoke add -A
+    git -c user.email=smoke@test -c user.name=smoke commit -q -m "smoke-test fixture init"
+    git -c user.email=smoke@test -c user.name=smoke push -q origin master
+
+    "$SCRIPT_DIR/orchestra" init . >/dev/null
+
+    cat > .orchestra/CONFIG.md <<EOF
+- \`MAX_SESSIONS\`: 2
+- \`MAX_CONSECUTIVE_CRASHES\`: 1
+- \`MODEL\`: opus
+- \`WORKTREE_BASE\`: $tmpdir/wt
+- \`BASE_BRANCH\`: master
+- \`TMUX_PREFIX\`: orch-smoke
+- \`SMOKE_TEST_TIMEOUT\`: 900
+EOF
+
+    cp OBJECTIVE.md .orchestra/OBJECTIVE.md
+
+    git -c user.email=smoke@test -c user.name=smoke add -A
+    git -c user.email=smoke@test -c user.name=smoke commit -q -m "smoke-test config + objective"
+    git -c user.email=smoke@test -c user.name=smoke push -q origin master
+
+    .orchestra/runtime/bin/orchestra run
+
+    # Poll for the run worktree to appear, then poll for its tmux session to end.
+    local elapsed=0 timeout=900 worktree="" run_ts=""
+    while [ $elapsed -lt $timeout ]; do
+        if [ -z "$worktree" ]; then
+            worktree=$(ls -d "$tmpdir"/wt/run-* 2>/dev/null | head -1 || true)
+            if [ -n "$worktree" ]; then
+                run_ts="${worktree##*/run-}"
+            fi
+        fi
+        if [ -n "$run_ts" ]; then
+            tmux has-session -t "orch-smoke-$run_ts" 2>/dev/null || break
+        fi
+        sleep 10
+        elapsed=$((elapsed + 10))
+    done
+
+    if [ $elapsed -ge $timeout ]; then
+        tmux kill-session -t "orch-smoke-$run_ts" 2>/dev/null || true
+        die "Smoke test timed out after ${timeout}s"
+    fi
+
+    smoke_assert_common "$tmpdir"
+    if [ "$variant" = "empty" ]; then
+        smoke_assert_empty "$tmpdir"
+    else
+        smoke_assert_with_governance "$tmpdir"
+    fi
+
+    echo ""
+    echo "Smoke test PASSED ($variant). Tempdir: $tmpdir"
+}
+
 cmd_reset()  { die "reset not yet implemented (Phase 15)"; }
 
 cmd="${1:-}"

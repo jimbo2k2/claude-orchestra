@@ -12,7 +12,7 @@
 set -u
 cd "$(dirname "$0")"
 
-SLOW_TESTS=(test_hang_detection.sh)
+SLOW_TESTS=(test_hang_detection.sh test_smoke_empty.sh)
 
 skip_slow=0
 if [ "${1:-}" = "--fast" ]; then
