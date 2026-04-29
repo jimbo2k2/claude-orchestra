@@ -169,7 +169,20 @@ cmd_status() { die "status not yet implemented (Phase 15)"; }
 smoke_assert_common() {
     local tmpdir="$1"
     local archive
-    archive=$(ls -d "$tmpdir"/wt/run-*/.orchestra/runs/archive/* 2>/dev/null | head -1)
+
+    # `find` over globbed `ls` because under set -euo pipefail an `ls` with
+    # no matching glob exits 2, pipefail propagates, and set -e aborts the
+    # script with a silent exit 2 BEFORE the die message can fire. find
+    # returns 0 with empty output on no matches, so the assertion message
+    # is what surfaces on failure.
+    #
+    # Path layout (depths measured from $tmpdir/wt):
+    #   wt/run-<ts>                              = depth 1
+    #   wt/run-<ts>/.orchestra/runs              = depth 3
+    #   wt/run-<ts>/.orchestra/runs/<ts>         = depth 4   (active)
+    #   wt/run-<ts>/.orchestra/runs/archive      = depth 4
+    #   wt/run-<ts>/.orchestra/runs/archive/<ts> = depth 5   (archived)
+    archive=$(find "$tmpdir"/wt -mindepth 5 -maxdepth 5 -type d -path '*/runs/archive/*' -print -quit 2>/dev/null)
     [ -n "$archive" ] || die "ASSERT FAIL: no archived run found"
 
     for f in 1-INBOX.md 2-OBJECTIVE.md 3-TODO.md 4-DECISIONS.md 5-CHANGELOG.md \
@@ -177,8 +190,11 @@ smoke_assert_common() {
         [ -e "$archive/$f" ] || die "ASSERT FAIL: missing $f in archive"
     done
 
+    # Active run dirs are at depth 4 directly under runs/ but NOT named archive.
+    # On a successful wind-down, the run dir was moved to archive/<ts>, so this
+    # count must be 0.
     local active_count
-    active_count=$(ls -d "$tmpdir"/wt/run-*/.orchestra/runs/2* 2>/dev/null | wc -l)
+    active_count=$(find "$tmpdir"/wt -mindepth 4 -maxdepth 4 -type d -path '*/.orchestra/runs/*' -not -name archive 2>/dev/null | wc -l)
     [ "$active_count" -eq 0 ] || die "ASSERT FAIL: active run folder remains (should be archived)"
 }
 
