@@ -56,6 +56,63 @@ write_session_json() {
         > "$fname"
 }
 
+run_session_with_watchdog() {
+    local prompt="$1"
+    local stdout_log="$2"
+    local stderr_log="$3"
+
+    local inotify_log
+    inotify_log=$(mktemp)
+    inotifywait -mr --format '.' "$WORKTREE_DIR" >> "$inotify_log" 2>/dev/null &
+    local inotify_pid=$!
+
+    echo "$prompt" | claude --print --dangerously-skip-permissions \
+        --model "$MODEL" --thinking-effort "$EFFORT" \
+        > "$stdout_log" 2> "$stderr_log" &
+    local claude_pid=$!
+
+    local last_inotify_size=0
+    local last_stdout_size=0
+    local quiet_seconds=0
+    # Poll on a 5s interval rather than 30s so a fast-exiting claude is
+    # detected promptly (the wider 30s sleep would otherwise pad every
+    # session by 30s). The MAX_HANG_SECONDS threshold is still enforced
+    # in real wall-clock time via accumulated quiet_seconds.
+    local poll_interval=5
+
+    while kill -0 "$claude_pid" 2>/dev/null; do
+        sleep "$poll_interval"
+
+        local i_size s_size
+        i_size=$(stat -c %s "$inotify_log" 2>/dev/null || echo 0)
+        s_size=$(stat -c %s "$stdout_log" 2>/dev/null || echo 0)
+
+        if [ "$i_size" -eq "$last_inotify_size" ] && [ "$s_size" -eq "$last_stdout_size" ]; then
+            quiet_seconds=$((quiet_seconds + poll_interval))
+            if [ "$quiet_seconds" -ge "${ORCHESTRA_CONFIG[MAX_HANG_SECONDS]}" ]; then
+                kill -TERM "$claude_pid" 2>/dev/null || true
+                sleep 30
+                kill -KILL "$claude_pid" 2>/dev/null || true
+                kill -TERM "$inotify_pid" 2>/dev/null || true
+                wait "$claude_pid" 2>/dev/null || true
+                rm -f "$inotify_log"
+                return 124  # standard timeout exit code
+            fi
+        else
+            quiet_seconds=0
+            last_inotify_size=$i_size
+            last_stdout_size=$s_size
+        fi
+    done
+
+    # `wait` may return non-zero (claude exited non-zero); avoid set -e abort.
+    local code=0
+    wait "$claude_pid" || code=$?
+    kill -TERM "$inotify_pid" 2>/dev/null || true
+    rm -f "$inotify_log"
+    return "$code"
+}
+
 build_session_prompt() {
     local n="$1"
     cat <<EOF
@@ -106,12 +163,16 @@ EOF
         prompt=$(build_session_prompt "$session_num")
     fi
 
-    # Run claude headlessly (per spec Section 9 "Headless invocation")
+    # Run claude headlessly under the hang-detection watchdog
+    # (per spec Section 11.C: inotify + stdout silence with SIGTERM/SIGKILL).
+    stdout_log=$(mktemp)
+    stderr_log=$(mktemp)
     set +e
-    out=$(echo "$prompt" | claude --print --dangerously-skip-permissions \
-        --model "$MODEL" --thinking-effort "$EFFORT" 2>&1)
+    run_session_with_watchdog "$prompt" "$stdout_log" "$stderr_log"
     code=$?
     set -e
+    out=$(cat "$stdout_log")
+    rm -f "$stdout_log" "$stderr_log"
 
     ended_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
@@ -139,6 +200,13 @@ EOF
         category="B"
     fi
 
+    # Watchdog timeout (124) means the session hung, not crashed.
+    # Override category to C — spec Section 11.C.
+    if [ "$code" -eq 124 ]; then
+        category="C"
+        signal=""
+    fi
+
     write_session_json "$session_num" "$started_at" "$ended_at" "$code" "$signal" "$category" \
         || { echo "ERROR: failed writing session JSON (session $session_num, exit $code)" >&2; exit 2; }
 
@@ -146,7 +214,7 @@ EOF
     # so it doesn't stay sticky after a successful (non-categorical) session.
     prev_category=""
 
-    if [ "$category" = "A" ] || [ "$category" = "B" ]; then
+    if [ "$category" = "A" ] || [ "$category" = "B" ] || [ "$category" = "C" ]; then
         crash_count=$((crash_count + 1))
         prev_category="$category"
         sleep "$CRASH_COOLDOWN"
