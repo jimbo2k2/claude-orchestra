@@ -1,0 +1,49 @@
+#!/bin/bash
+# orchestra — CLI for managing autonomous Claude Code workflows.
+# Spec: docs/superpowers/specs/2026-04-29-orchestra-cleanup-design.md
+#
+# Subcommands:
+#   init     — Scaffold .orchestra/ in current dir
+#   run      — Start an orchestra run
+#   status   — Show current run state
+#   test     — Run smoke test
+#   reset    — Archive in-progress run state and reset
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$SCRIPT_DIR/../lib"
+
+usage() {
+    cat <<EOF
+Usage: orchestra <command> [args]
+
+Commands:
+  init [dir]   Scaffold .orchestra/ state files in target directory
+  run          Start an orchestra run (uses .orchestra/CONFIG.md + OBJECTIVE.md)
+  status       Show current run state
+  test         Run end-to-end smoke test
+  reset        Archive current run state, reset for next
+
+All run parameters live in .orchestra/CONFIG.md — no env vars, no CLI args.
+EOF
+}
+
+die() { echo "ERROR: $1" >&2; exit 1; }
+
+cmd_init()   { die "init not yet implemented (Phase 3)"; }
+cmd_run()    { die "run not yet implemented (Phase 4)"; }
+cmd_status() { die "status not yet implemented (Phase 15)"; }
+cmd_test()   { die "test not yet implemented (Phase 11)"; }
+cmd_reset()  { die "reset not yet implemented (Phase 15)"; }
+
+cmd="${1:-}"
+shift 2>/dev/null || true
+case "$cmd" in
+    init)      cmd_init "$@" ;;
+    run|start) cmd_run "$@" ;;
+    status)    cmd_status "$@" ;;
+    test)      cmd_test "$@" ;;
+    reset)     cmd_reset "$@" ;;
+    -h|--help|help|"") usage; exit 0 ;;
+    *) echo "Unknown command: $cmd" >&2; usage >&2; exit 1 ;;
+esac
