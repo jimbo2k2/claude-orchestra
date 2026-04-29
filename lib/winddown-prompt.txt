@@ -3,7 +3,7 @@ are complete; your job is to ingest the run's governance into the parent
 project's governance shape and merge the run-branch into the base branch.
 
 The contract below is binding. Follow it in order. Spec reference:
-docs/superpowers/specs/2026-04-29-orchestra-cleanup-design.md Section 6.3.
+build-history/archive/v0-cleanup/2026-04-29-orchestra-cleanup-design.md Section 6.3.
 
 ## Variables
 

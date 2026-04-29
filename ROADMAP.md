@@ -9,8 +9,8 @@ Categorised by area for quick scanning. Original per-phase context (when
 the item was first flagged) lives in git history; see commits prior to
 and including the Phase 19 quick-win followups commit, where each item
 was filed against the phase that surfaced it. The superseded file
-`docs/superpowers/code-review-followups.md` (deleted in that commit) had
-the full per-phase narrative.
+`build-history/archive/v0-cleanup/code-review-followups.md` (deleted in
+that commit) had the full per-phase narrative.
 
 ## Hardening (defensive — no current bug, would prevent edge cases)
 

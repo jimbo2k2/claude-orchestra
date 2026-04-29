@@ -73,13 +73,15 @@ README.md
 
 ## Where things live
 
-- **Spec (canonical):** `docs/superpowers/specs/2026-04-29-orchestra-cleanup-design.md`
-- **Plan:** `docs/superpowers/plans/2026-04-29-orchestra-cleanup-plan.md`
+- **Spec (canonical):** `build-history/archive/v0-cleanup/2026-04-29-orchestra-cleanup-design.md`
+- **Plan:** `build-history/archive/v0-cleanup/2026-04-29-orchestra-cleanup-plan.md`
 - **Smoke fixtures:** `examples/smoke-test/{empty,with-governance,with-conflict}/`
 - **Migration prompt:** `MIGRATION.md` (Claude-readable; for users coming
   from an older orchestra install)
-- **Code review followups:** `docs/superpowers/code-review-followups.md`
-  (minor items batched for Phase 19 wrap-up)
+- **Backlog:** `ROADMAP.md` (non-blocking improvements identified during
+  the rewrite — hardening, diagnostics, refactor, test coverage)
+- **Build history:** `build-history/archive/<version>/` (per-version spec,
+  plan, RESUME, and Claude transcripts that produced this codebase)
 
 ## What this project does NOT have an opinion on
 

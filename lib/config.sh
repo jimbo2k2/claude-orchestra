@@ -3,7 +3,7 @@
 # (would leak those options into the caller's shell).
 #
 # CONFIG.md parser — extracts KEY: VALUE bullets from markdown.
-# Spec: docs/superpowers/specs/2026-04-29-orchestra-cleanup-design.md Section 10.
+# Spec: build-history/archive/v0-cleanup/2026-04-29-orchestra-cleanup-design.md Section 10.
 # Values are stored verbatim in ORCHESTRA_CONFIG associative array; never eval'd.
 #
 # Usage:

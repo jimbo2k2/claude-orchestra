@@ -1,6 +1,6 @@
 #!/bin/bash
 # orchestrator.sh — session loop running inside the run worktree's tmux.
-# Spec: docs/superpowers/specs/2026-04-29-orchestra-cleanup-design.md Sections 6, 11.
+# Spec: build-history/archive/v0-cleanup/2026-04-29-orchestra-cleanup-design.md Sections 6, 11.
 #
 # 9-sessions/NNN.json schema:
 # {
