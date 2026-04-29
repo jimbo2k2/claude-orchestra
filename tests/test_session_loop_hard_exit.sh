@@ -5,11 +5,15 @@ REPO="$(pwd)"
 
 # Use a fake Claude binary that exits 1 immediately
 TMP=$(mktemp -d)
-trap "rm -rf $TMP; tmux kill-server 2>/dev/null || true" EXIT
+trap 'rm -rf "$TMP"; [ -n "${RUN_TS:-}" ] && tmux kill-session -t "orch-test-$RUN_TS" 2>/dev/null || tmux kill-server 2>/dev/null || true' EXIT
 
 mkdir -p "$TMP/fake-bin"
+# Drain stdin before exit to avoid the SIGPIPE race against the orchestrator's
+# heredoc-piped prompt (would otherwise occasionally surface as exit 141
+# instead of 1 under set -o pipefail).
 cat > "$TMP/fake-bin/claude" <<'EOF'
 #!/bin/bash
+cat >/dev/null
 echo "simulated crash" >&2
 exit 1
 EOF
@@ -41,7 +45,7 @@ PATH="$TMP/fake-bin:$PATH" .orchestra/runtime/bin/orchestra run 2>&1
 # Wait for orchestrator to bail. Resolve the actual run timestamp from
 # the worktree path (the project's .orchestra/runs/ contains an "archive"
 # entry from init, so picking the newest entry there is unreliable).
-for i in $(seq 1 30); do
+for _ in $(seq 1 30); do
     WT=$(ls -d "$TMP/wt"/run-* 2>/dev/null | head -1 || true)
     if [ -z "$WT" ]; then
         sleep 1

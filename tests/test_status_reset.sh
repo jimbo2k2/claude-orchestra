@@ -16,7 +16,10 @@ REPO="$(pwd)"
 
 TMP_COMPLETE=$(mktemp -d)
 TMP_BLOCKED=$(mktemp -d)
-trap 'rm -rf "$TMP_COMPLETE" "$TMP_BLOCKED"; tmux kill-server 2>/dev/null || true' EXIT
+# Best-effort cleanup: the test cycles through two TMUX_PREFIXes; if RUN_TS is
+# set try both kill-sessions, otherwise fall back to kill-server. Each command
+# is ||-true'd individually so partial failures don't propagate under set -e.
+trap 'rm -rf "$TMP_COMPLETE" "$TMP_BLOCKED" 2>/dev/null || true; tmux kill-session -t "orch-sr-c-${RUN_TS:-x}" 2>/dev/null || true; tmux kill-session -t "orch-sr-b-${RUN_TS:-x}" 2>/dev/null || true' EXIT
 
 # ---------- Scenario 1: COMPLETE path (run gets archived by wind-down) ----------
 

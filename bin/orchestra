@@ -56,7 +56,10 @@ cmd_init() {
     cp "$LIB_DIR/config.sh" "$orch/runtime/lib/config.sh"
     cp "$LIB_DIR/winddown-prompt.txt" "$orch/runtime/lib/winddown-prompt.txt"
 
-    # Copy templates only if missing — never overwrite user content
+    # Copy templates only if missing — never overwrite user content.
+    # Each entry: "<template-filename>:<dest-filename>". Most are identity;
+    # orchestra-CLAUDE.md is renamed to CLAUDE.md so the source template
+    # filename doesn't collide with the project's own CLAUDE.md template.
     local TEMPLATE_DIR="$SCRIPT_DIR/../templates"
     for pair in "CONFIG.md:CONFIG.md" "OBJECTIVE.md:OBJECTIVE.md" "orchestra-CLAUDE.md:CLAUDE.md"; do
         local src="${pair%:*}" dst="${pair#*:}"
@@ -376,8 +379,10 @@ cmd_test() {
 
     # Local bare remote so wind-down's `git push origin master` has a target.
     # The fixture has no real remote; without this, push fails and the run BLOCKs.
+    # Pin --initial-branch=master so the bare HEAD matches BASE_BRANCH (otherwise
+    # the bare repo's symbolic HEAD inherits the user's git default, often "main").
     local bare="$tmpdir/origin.git"
-    git init -q --bare "$bare"
+    git init -q --bare --initial-branch=master "$bare"
     git remote add origin "$bare"
 
     git -c user.email=smoke@test -c user.name=smoke add -A
@@ -496,7 +501,7 @@ cmd_reset() {
 }
 
 cmd="${1:-}"
-shift 2>/dev/null || true
+[[ $# -gt 0 ]] && shift
 case "$cmd" in
     init)      cmd_init "$@" ;;
     run|start) cmd_run "$@" ;;

@@ -4,7 +4,10 @@ cd "$(dirname "$0")/.."
 
 REPO="$(pwd)"
 TMP=$(mktemp -d)
-trap "rm -rf $TMP; tmux kill-server 2>/dev/null || true" EXIT
+# Scope the tmux kill to this test's session if RUN_TS gets set below; fall
+# back to kill-server only as a last resort (RUN_TS may never be set if the
+# orchestra run aborted before launching tmux).
+trap 'rm -rf "$TMP"; [ -n "${RUN_TS:-}" ] && tmux kill-session -t "orch-test-$RUN_TS" 2>/dev/null || tmux kill-server 2>/dev/null || true' EXIT
 
 # Inject a fake claude so we don't invoke the real CLI from a test.
 # A bare "COMPLETE" output produces a clean session_signal, exit 0 — perfect
@@ -49,7 +52,7 @@ git commit -q -m "config + objective"
 PATH="$TMP/fake-bin:$PATH" .orchestra/runtime/bin/orchestra run 2>&1
 
 # Wait for orchestrator to finish (one session, COMPLETE signal, exits fast)
-for i in $(seq 1 30); do
+for _ in $(seq 1 30); do
     WT=$(ls -d "$TMP/wt"/run-* 2>/dev/null | head -1 || true)
     if [ -z "$WT" ]; then
         sleep 1

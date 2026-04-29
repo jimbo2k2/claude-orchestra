@@ -446,8 +446,11 @@ EOF
     if [ $code -ne 0 ]; then
         category="A"
     elif [ "$last_line" = "COMPLETE" ]; then
-        cd "$WORKTREE_DIR"
-        if [ -n "$(git status --porcelain)" ]; then
+        # Subshell-scoped cd so this branch can't leak the working directory
+        # into later iterations of the session loop. Behaviour is unchanged
+        # today (tmux launches the orchestrator with cwd=$WORKTREE_DIR), but
+        # this guards against a future refactor that changes the entry cwd.
+        if [ -n "$(cd "$WORKTREE_DIR" && git status --porcelain)" ]; then
             signal="COMPLETE"
             category="D"
         else

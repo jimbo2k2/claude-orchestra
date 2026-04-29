@@ -1,4 +1,7 @@
 #!/bin/bash
+# This file is sourced; intentionally does not set 'set -euo pipefail'
+# (would leak those options into the caller's shell).
+#
 # CONFIG.md parser — extracts KEY: VALUE bullets from markdown.
 # Spec: docs/superpowers/specs/2026-04-29-orchestra-cleanup-design.md Section 10.
 # Values are stored verbatim in ORCHESTRA_CONFIG associative array; never eval'd.
@@ -34,7 +37,8 @@ parse_config_md() {
         if [[ "$line" =~ $re ]]; then
             key="${BASH_REMATCH[1]}"
             value="${BASH_REMATCH[2]}"
-            # Trim trailing whitespace (leading already consumed by regex).
+            # Strip trailing whitespace; leading whitespace is already consumed
+            # by the [[:space:]]* portion of the regex above.
             value="${value%"${value##*[![:space:]]}"}"
 
             if [ -n "${seen[$key]:-}" ]; then
@@ -50,7 +54,8 @@ parse_config_md() {
 }
 
 # Apply defaults for optional keys (call after parse, before validate).
-# Uses :=, so only keys not already set are filled in.
+# Uses :=, so only keys not already set are filled in. Idempotent and
+# side-effect-free on missing keys — calling twice is harmless.
 apply_config_defaults() {
     : "${ORCHESTRA_CONFIG[MAX_HANG_SECONDS]:=1200}"
     : "${ORCHESTRA_CONFIG[EFFORT]:=high}"

@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$(pwd)"
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"; tmux kill-server 2>/dev/null || true' EXIT
+trap 'rm -rf "$TMP"; [ -n "${RUN_TS:-}" ] && tmux kill-session -t "orch-bl-$RUN_TS" 2>/dev/null || tmux kill-server 2>/dev/null || true' EXIT
 
 # Fake claude: write a HANDOVER, emit BLOCKED. No need to commit because
 # spec Section 11 explicitly allows BLOCKED to leave dirty state.

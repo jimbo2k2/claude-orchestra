@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 source lib/config.sh
 
 TMP=$(mktemp -d)
-trap "rm -rf $TMP" EXIT
+trap 'rm -rf "$TMP"' EXIT
 
 cat > "$TMP/CONFIG.md" <<'EOF'
 # Test Config
@@ -23,10 +23,10 @@ EOF
 declare -gA ORCHESTRA_CONFIG
 parse_config_md "$TMP/CONFIG.md"
 
-[ "${ORCHESTRA_CONFIG[MAX_SESSIONS]}" = "5" ] || { echo "MAX_SESSIONS"; exit 1; }
-[ "${ORCHESTRA_CONFIG[MODEL]}" = "opus" ] || { echo "MODEL"; exit 1; }
-[ "${ORCHESTRA_CONFIG[WORKTREE_BASE]}" = "/tmp/orch" ] || { echo "WORKTREE_BASE"; exit 1; }
-[ "${ORCHESTRA_CONFIG[BASE_BRANCH]}" = "main" ] || { echo "BASE_BRANCH"; exit 1; }
+[ "${ORCHESTRA_CONFIG[MAX_SESSIONS]}" = "5" ] || { echo "MAX_SESSIONS expected 5 got '${ORCHESTRA_CONFIG[MAX_SESSIONS]:-<unset>}'"; exit 1; }
+[ "${ORCHESTRA_CONFIG[MODEL]}" = "opus" ] || { echo "MODEL expected opus got '${ORCHESTRA_CONFIG[MODEL]:-<unset>}'"; exit 1; }
+[ "${ORCHESTRA_CONFIG[WORKTREE_BASE]}" = "/tmp/orch" ] || { echo "WORKTREE_BASE expected /tmp/orch got '${ORCHESTRA_CONFIG[WORKTREE_BASE]:-<unset>}'"; exit 1; }
+[ "${ORCHESTRA_CONFIG[BASE_BRANCH]}" = "main" ] || { echo "BASE_BRANCH expected main got '${ORCHESTRA_CONFIG[BASE_BRANCH]:-<unset>}'"; exit 1; }
 
 # Test: missing required key fails
 cat > "$TMP/bad1.md" <<'EOF'

@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$(pwd)"
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"; tmux kill-server 2>/dev/null || true' EXIT
+trap 'rm -rf "$TMP"; [ -n "${RUN_TS:-}" ] && tmux kill-session -t "orch-wd-$RUN_TS" 2>/dev/null || tmux kill-server 2>/dev/null || true' EXIT
 
 # Fake claude: working session commits run-folder state then COMPLETE;
 # wind-down session pretends to merge and prints COMPLETE.
@@ -56,7 +56,9 @@ git -c user.email=test@test -c user.name=test commit -q -m "config"
 
 PATH="$TMP/fake-bin:$PATH" .orchestra/runtime/bin/orchestra run 2>&1
 
-# Wait for orchestrator to finish (working session + wind-down + archive)
+# Wait for orchestrator to finish (working session + wind-down + archive).
+# The break exits the loop on the first iteration where WORKTREE is non-empty
+# AND the tmux session is gone (i.e. orchestrator has exited).
 WORKTREE=""
 for _ in $(seq 1 60); do
     WORKTREE=$(ls -d "$TMP/wt"/run-* 2>/dev/null | head -1 || true)

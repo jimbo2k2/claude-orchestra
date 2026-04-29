@@ -26,15 +26,16 @@ fi
 REPO="$(pwd)"
 for cmd in init run status reset; do
     if [ "$cmd" = "init" ]; then
+        # Use init's target-dir argument instead of cd+capture-via-tempfile —
+        # avoids any fixed-name temp-file race between parallel test runs.
         TMP_DISPATCH=$(mktemp -d)
-        ( cd "$TMP_DISPATCH" && git init -q && out=$("$REPO/bin/orchestra" init . 2>&1) || true; echo "$out" ) >/tmp/.orchestra_dispatch_out 2>&1 || true
-        out="$(cat /tmp/.orchestra_dispatch_out)"
-        rm -rf "$TMP_DISPATCH" /tmp/.orchestra_dispatch_out
+        ( cd "$TMP_DISPATCH" && git init -q )
+        out=$("$REPO/bin/orchestra" init "$TMP_DISPATCH" 2>&1) || true
+        rm -rf "$TMP_DISPATCH"
     else
-        if out=$(./bin/orchestra "$cmd" 2>&1); then
-            # Stubs may exit 0 for help-like behaviour or non-zero — both fine, just check no "Unknown command"
-            :
-        fi
+        # Stubs may exit 0 (help-like behaviour) or non-zero — both fine,
+        # we only check that the dispatcher didn't classify it as unknown.
+        out=$(./bin/orchestra "$cmd" 2>&1) || true
     fi
     if echo "$out" | grep -q "Unknown command"; then
         echo "subcommand '$cmd' was treated as unknown"

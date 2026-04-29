@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 REPO="$(pwd)"
 
 TMP=$(mktemp -d)
-trap 'rm -rf $TMP; tmux kill-server 2>/dev/null || true' EXIT
+trap 'rm -rf "$TMP"; [ -n "${RUN_TS:-}" ] && tmux kill-session -t "orch-stderr-$RUN_TS" 2>/dev/null || tmux kill-server 2>/dev/null || true' EXIT
 
 # Fake claude that exits 1 with a recognisable diagnostic on stderr.
 mkdir -p "$TMP/fake-bin"
@@ -40,7 +40,7 @@ git commit -q -m "config"
 PATH="$TMP/fake-bin:$PATH" .orchestra/runtime/bin/orchestra run 2>&1
 
 # Wait for orchestrator to bail (MAX_SESSIONS=1 → one crash then exit).
-for i in $(seq 1 30); do
+for _ in $(seq 1 30); do
     WT=$(ls -d "$TMP/wt"/run-* 2>/dev/null | head -1 || true)
     if [ -z "$WT" ]; then
         sleep 1

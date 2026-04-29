@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$(pwd)"
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"; tmux kill-server 2>/dev/null || true' EXIT
+trap 'rm -rf "$TMP"; [ -n "${RUN_TS:-}" ] && tmux kill-session -t "orch-c-$RUN_TS" 2>/dev/null || tmux kill-server 2>/dev/null || true' EXIT
 
 # Fake claude that hangs forever (drains stdin first to avoid SIGPIPE race)
 mkdir -p "$TMP/fake-bin"
@@ -39,7 +39,7 @@ PATH="$TMP/fake-bin:$PATH" .orchestra/runtime/bin/orchestra run 2>&1
 
 # Wait — should bail in ~90s (MAX_HANG_SECONDS=60 + 30s grace).
 WORKTREE=""
-for i in $(seq 1 14); do
+for _ in $(seq 1 14); do
     WORKTREE=$(ls -d "$TMP/wt"/run-* 2>/dev/null | head -1 || true)
     if [ -n "$WORKTREE" ]; then
         RUN_TS="${WORKTREE##*/run-}"

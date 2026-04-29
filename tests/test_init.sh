@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 
 REPO="$(pwd)"
 TMP=$(mktemp -d)
-trap "rm -rf $TMP" EXIT
+trap 'rm -rf "$TMP"' EXIT
 
 cd "$TMP"
 git init -q
