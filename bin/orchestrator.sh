@@ -186,8 +186,9 @@ fetch_quota() {
 # invocation when QUOTA_PACING=true. Logs to stderr so smoke-output capture
 # (stdout) is not polluted.
 #
-# API utilization fields are integer percentages (0-100), so plain bash
-# integer comparison suffices — no bc dependency.
+# API utilization fields used to be integer percentages but now arrive as
+# floats (e.g. 15.0). Coerce to int via `jq | floor` so plain bash integer
+# comparison works — no bc dependency.
 wait_for_quota() {
     if [ "$QUOTA_PACING" != "true" ]; then
         return 0
@@ -200,8 +201,8 @@ wait_for_quota() {
     }
 
     local five_hour seven_day resets_at
-    five_hour=$(echo "$quota_json" | jq -r '.five_hour')
-    seven_day=$(echo "$quota_json" | jq -r '.seven_day')
+    five_hour=$(echo "$quota_json" | jq -r '.five_hour | floor')
+    seven_day=$(echo "$quota_json" | jq -r '.seven_day | floor')
     resets_at=$(echo "$quota_json" | jq -r '.resets_at')
 
     echo "   Quota: 5h=${five_hour}% 7d=${seven_day}% (threshold: ${QUOTA_THRESHOLD}%)" >&2
@@ -226,7 +227,7 @@ wait_for_quota() {
                 sleep "$sleep_for"
 
                 quota_json=$(fetch_quota) || break
-                five_hour=$(echo "$quota_json" | jq -r '.five_hour')
+                five_hour=$(echo "$quota_json" | jq -r '.five_hour | floor')
                 resets_at=$(echo "$quota_json" | jq -r '.resets_at')
 
                 if [ "$five_hour" -lt "$QUOTA_THRESHOLD" ]; then
