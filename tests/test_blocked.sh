@@ -15,8 +15,7 @@ prompt=$(cat)
 # "$WORKTREE_DIR/.orchestra/runs/$RUN_TS/" in build_session_prompt.
 rd=$(echo "$prompt" | grep -oE '/[a-zA-Z0-9_/.-]*\.orchestra/runs/[^/ ]+' | head -1)
 echo "Cannot proceed without API key" > "$rd/6-HANDOVER.md"
-echo "stuck"
-echo "BLOCKED"
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"stuck\nBLOCKED"}'
 exit 0
 EOF
 chmod +x "$TMP/fake-bin/claude"

@@ -17,7 +17,8 @@ cat > "$TMP/fake-bin/claude" <<'EOF'
 #!/bin/bash
 # Drain stdin so the orchestrator's prompt heredoc doesn't SIGPIPE us.
 cat >/dev/null
-echo "COMPLETE"
+# Phase 20: stream-json output. Single result event with COMPLETE.
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"COMPLETE"}'
 EOF
 chmod +x "$TMP/fake-bin/claude"
 

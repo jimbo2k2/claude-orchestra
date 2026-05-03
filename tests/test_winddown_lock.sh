@@ -19,15 +19,13 @@ if echo "$prompt" | grep -q "wind-down session"; then
     branch=$(echo "$prompt" | grep "Run branch:" | sed -E 's/.*Run branch:[[:space:]]+([^[:space:]]+).*/\1/')
     git merge --ff-only "$branch" 2>/dev/null || true
     git push origin master 2>/dev/null || true
-    echo "wind-down done"
-    echo "COMPLETE"
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"wind-down done\nCOMPLETE"}'
 else
     # Working session: commit the run-folder state files cmd_run created so
     # the worktree is clean (otherwise Cat D fires and wind-down never runs).
     git add -A
     git -c user.email=test@test -c user.name=test commit --allow-empty -q -m "session work" 2>/dev/null || true
-    echo "all good"
-    echo "COMPLETE"
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"all good\nCOMPLETE"}'
 fi
 exit 0
 EOF

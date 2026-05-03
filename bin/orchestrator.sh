@@ -268,6 +268,18 @@ session_num=0
 crash_count=0
 prev_category=""
 
+# Extract the final exit signal from a stream-json stdout log. The agent's
+# COMPLETE/HANDOVER/BLOCKED line lives at the end of the result event's
+# `.result` text; we take the LAST non-empty line of that, stripped of all
+# whitespace. Empty output means no result event present (Cat A/C territory).
+extract_signal() {
+    local file="$1"
+    local result_text
+    result_text=$(grep '"type":"result"' "$file" 2>/dev/null \
+        | tail -1 | jq -r '.result // empty' 2>/dev/null || echo "")
+    printf '%s' "$result_text" | awk 'NF{line=$0} END{print line}' | tr -d '[:space:]'
+}
+
 write_session_json() {
     local n="$1" started="$2" ended="$3" code="$4" signal="$5" cat="$6"
     local fname
@@ -324,14 +336,31 @@ run_session_with_watchdog() {
     fi
     rm -f "$inotify_err"  # drop after startup; main monitoring uses inotify_log only
 
-    # Tee both streams: the watchdog needs the file (size polling for hang
-    # detection) and the signal parser reads it at the end, but mirroring to
-    # the orchestrator's stdout/stderr surfaces live output in the tmux pane
-    # so a human attaching to the run can see what claude is doing.
+    # Stream-json output gives the watchdog (which polls $stdout_log size for
+    # hang detection) a continuously-growing file. Claude writes raw NDJSON
+    # straight to $stdout_log — no process substitution between, so when wait
+    # returns the file is fully flushed for deterministic signal extraction.
     echo "$prompt" | claude --print --dangerously-skip-permissions \
         --model "$MODEL" --effort "$EFFORT" \
-        > >(tee "$stdout_log") 2> >(tee "$stderr_log" >&2) &
+        --output-format stream-json --verbose \
+        > "$stdout_log" 2> "$stderr_log" &
     local claude_pid=$!
+
+    # Cosmetic pane display: tail the JSON file as it grows and pipe through
+    # jq to surface assistant text + final result in real time. Independent
+    # pipeline so a jq error or SIGPIPE here cannot affect claude. Killed
+    # explicitly after wait so it can't outlive the session.
+    ( tail -n +1 -f "$stdout_log" 2>/dev/null \
+        | jq -rR --unbuffered '
+                (fromjson?) as $e
+                | if $e == null then empty
+                  elif $e.type == "assistant" then
+                      ($e.message.content[]? | select(.type == "text") | .text) // empty
+                  elif $e.type == "result" then
+                      "\n─── claude session result ───\n\($e.result // "")\n─── end ───"
+                  else empty end
+            ' 2>/dev/null ) &
+    local pane_pid=$!
 
     local last_inotify_size=0
     local last_stdout_size=0
@@ -372,6 +401,17 @@ run_session_with_watchdog() {
     wait "$claude_pid" || code=$?
     kill -TERM "$inotify_pid" 2>/dev/null || true
     rm -f "$inotify_log"
+
+    # Drain the pane subshell. Brief grace so tail can flush the last lines
+    # to jq, then SIGTERM tail (which lets jq exit cleanly via SIGPIPE).
+    sleep 0.3
+    kill -TERM "$pane_pid" 2>/dev/null || true
+    wait "$pane_pid" 2>/dev/null || true
+
+    # Mirror stderr to the pane after the run — useful for diagnosing crashes
+    # (real claude rarely writes here on success). Skip empty stderr.
+    [ -s "$stderr_log" ] && cat "$stderr_log" >&2
+
     return "$code"
 }
 
@@ -410,10 +450,12 @@ while [ $session_num -lt $MAX_SESSIONS ] && [ $crash_count -lt $MAX_CRASHES ]; d
 
     # Per-session start banner. Counts open TODOs from 3-TODO.md so the human
     # has a sense of remaining work between sessions (file is empty on
-    # session 1; the agent populates it as it goes).
+    # session 1; the agent populates it as it goes). grep -c prints "0" on
+    # zero matches AND exits 1 — without the explicit reassignment we'd
+    # capture both grep's "0" and the fallback echo, giving "0\n0".
     todo_open=0
     if [ -f "$RUN_DIR/3-TODO.md" ]; then
-        todo_open=$(grep -c '^\s*-\s\[\s\]' "$RUN_DIR/3-TODO.md" 2>/dev/null || echo 0)
+        todo_open=$(grep -c '^\s*-\s\[\s\]' "$RUN_DIR/3-TODO.md" 2>/dev/null) || todo_open=0
     fi
     echo ""
     echo "─── Session $session_num/$MAX_SESSIONS  (started $started_at, open TODOs: $todo_open) ───"
@@ -456,15 +498,19 @@ EOF
     run_session_with_watchdog "$prompt" "$stdout_log" "$stderr_log"
     code=$?
     set -e
+    # Raw stream-json file; kept around briefly for signal extraction below.
     out=$(cat "$stdout_log")
 
-    # On crash/hang, preserve stderr in the run folder for diagnosis.
-    # Spec Section 11 makes wind-down failure handling depend on this evidence.
+    # On crash/hang, preserve stderr (and the raw stream-json for diagnosis)
+    # in the run folder. Spec Section 11 makes wind-down failure handling
+    # depend on stderr; the JSON helps post-mortem of partial sessions.
     if [ "$code" -ne 0 ]; then
         cp "$stderr_log" "$RUN_DIR/9-sessions/$(printf '%03d' "$session_num")-stderr.txt"
+        # NDJSON, not a single JSON document — the .ndjson extension keeps
+        # globs like `*.json` (used by tests + tooling for the per-session
+        # summaries) from picking these diagnostics up.
+        cp "$stdout_log" "$RUN_DIR/9-sessions/$(printf '%03d' "$session_num")-stream.ndjson"
     fi
-
-    rm -f "$stdout_log" "$stderr_log"
 
     # Exit code 125 from the watchdog signals an infrastructure failure
     # (inotifywait could not start). This is not a Cat A/B/C session crash
@@ -477,13 +523,16 @@ EOF
 
     ended_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-    # Determine exit signal and crash category.
-    # Per spec Section 11: parse the final non-empty line of stdout — awk
-    # tracks the last line with any non-blank content so trailing blank
-    # lines don't mask a clean COMPLETE/HANDOVER/BLOCKED.
-    last_line=$(printf '%s' "$out" | awk 'NF{line=$0} END{print line}' | tr -d '[:space:]')
+    # Determine exit signal and crash category. Under stream-json the signal
+    # lives in the final result event's `.result` text — extract_signal()
+    # pulls that and returns its last non-empty line. Empty result means
+    # either no result event landed (crash/hang) or the agent emitted no
+    # signal (Cat B, handled below).
+    last_line=$(extract_signal "$stdout_log")
     signal=""
     category=""
+
+    rm -f "$stdout_log" "$stderr_log"
 
     if [ $code -ne 0 ]; then
         category="A"
@@ -612,12 +661,13 @@ DA_EOF
 
                 if [ "$wd_code" -ne 0 ]; then
                     cp "$wd_stderr_log" "$RUN_DIR/wind-down-stderr.txt"
+                    cp "$wd_stdout_log" "$RUN_DIR/wind-down-stream.ndjson"
                 fi
-                rm -f "$wd_stdout_log" "$wd_stderr_log"
 
-                # Same awk-based last-non-empty-line extractor as the working
-                # session (spec Section 11; Phase 5 fix-up).
-                wd_last=$(printf '%s' "$wd_out" | awk 'NF{line=$0} END{print line}' | tr -d '[:space:]')
+                # Stream-json signal extraction (mirrors the working-session
+                # path; spec Section 11). Extract before removing the file.
+                wd_last=$(extract_signal "$wd_stdout_log")
+                rm -f "$wd_stdout_log" "$wd_stderr_log"
 
                 # Spec Section 6.4 + Category E: wind-down failures don't auto-
                 # retry. Categorise the failure, write the marker, print user-

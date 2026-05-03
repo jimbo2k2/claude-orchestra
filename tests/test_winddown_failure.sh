@@ -12,12 +12,8 @@ cat > "$TMP/fake-bin/claude" <<'EOF'
 #!/bin/bash
 prompt=$(cat)
 if echo "$prompt" | grep -q "wind-down session"; then
-    echo "I am stuck on a conflict"
     # Spec Section 6.3 wind-down BLOCKED shape: files in conflict, git status
     # excerpt, manual resolution.
-    # The wind-down prompt template uses `- Run dir:    <path>` (leading
-    # bullet); grep + grep -oE picks the absolute path regardless of
-    # column count.
     rd=$(echo "$prompt" | grep "Run dir:" | grep -oE '/[^ ]+\.orchestra/runs/[^ ]+' | head -1)
     cat > "$rd/6-HANDOVER.md" <<HOEOF
 # Wind-down BLOCKED
@@ -26,12 +22,11 @@ Files in conflict: src/foo.c
 
 Manual resolution: edit src/foo.c, git add, git commit, git push.
 HOEOF
-    echo "BLOCKED"
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"I am stuck on a conflict\nBLOCKED"}'
 else
     git add -A
     git -c user.email=t@t -c user.name=t commit --allow-empty -q -m "session" 2>/dev/null || true
-    echo "all good"
-    echo "COMPLETE"
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"all good\nCOMPLETE"}'
 fi
 exit 0
 EOF

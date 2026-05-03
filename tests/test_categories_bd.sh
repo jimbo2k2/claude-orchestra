@@ -9,7 +9,9 @@ trap 'rm -rf "$TMP"; [ -n "${RUN_TS:-}" ] && tmux kill-session -t "orch-bd-$RUN_
 mkdir -p "$TMP/fake-bin"
 cat > "$TMP/fake-bin/claude" <<'EOF'
 #!/bin/bash
-echo "I did some thinking but forgot the signal"
+# Stream-json result event whose .result text contains no recognised signal
+# (Category B: clean exit, no COMPLETE/HANDOVER/BLOCKED).
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"I did some thinking but forgot the signal"}'
 exit 0
 EOF
 chmod +x "$TMP/fake-bin/claude"

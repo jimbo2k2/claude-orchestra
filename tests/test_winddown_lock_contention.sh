@@ -29,13 +29,11 @@ if echo "$prompt" | grep -q "wind-down session"; then
     git checkout master 2>/dev/null || true
     branch=$(echo "$prompt" | grep "Run branch:" | sed -E 's/.*Run branch:[[:space:]]+([^[:space:]]+).*/\1/')
     git merge --ff-only "$branch" 2>/dev/null || true
-    echo "wind-down done"
-    echo "COMPLETE"
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"wind-down done\nCOMPLETE"}'
 else
     git add -A
     git -c user.email=t@t -c user.name=t commit --allow-empty -q -m "session" 2>/dev/null || true
-    echo "all good"
-    echo "COMPLETE"
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"all good\nCOMPLETE"}'
 fi
 EOF
 chmod +x "$TMP/fake-bin/claude"

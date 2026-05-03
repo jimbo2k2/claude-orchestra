@@ -34,13 +34,11 @@ if echo "$prompt" | grep -q "wind-down session"; then
     git -c user.email=t@t -c user.name=t checkout master 2>/dev/null
     git -c user.email=t@t -c user.name=t merge --no-ff "$branch" -m "merge $branch" 2>/dev/null
     git -c user.email=t@t -c user.name=t push origin master 2>/dev/null
-    echo "merged"
-    echo "COMPLETE"
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"merged\nCOMPLETE"}'
 else
     git add -A 2>/dev/null || true
     git -c user.email=t@t -c user.name=t commit --allow-empty -q -m "session work" 2>/dev/null || true
-    echo "doing work"
-    echo "COMPLETE"
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"doing work\nCOMPLETE"}'
 fi
 exit 0
 EOF
@@ -110,8 +108,7 @@ cat > "$TMP_BLOCKED/fake-bin/claude" <<'EOF'
 prompt=$(cat)
 rd=$(echo "$prompt" | grep -oE '/[a-zA-Z0-9_/.-]*\.orchestra/runs/[^/ ]+' | head -1)
 echo "Cannot proceed without API key" > "$rd/6-HANDOVER.md"
-echo "stuck"
-echo "BLOCKED"
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"stuck\nBLOCKED"}'
 exit 0
 EOF
 chmod +x "$TMP_BLOCKED/fake-bin/claude"

@@ -22,7 +22,11 @@ cat >/dev/null
 # initialises .orchestra/runs/<ts>/ before invoking claude, so a real agent
 # would commit those state files during their session. Mirror that here.
 git add -A 2>/dev/null && git -c user.email=test@x -c user.name=test commit -q -m "session work" 2>/dev/null || true
-printf 'doing some work...\nCOMPLETE\n   \n'
+# Phase 20: orchestrator now uses --output-format stream-json. Fake a result
+# event whose .result text ends with COMPLETE plus trailing whitespace —
+# regression test for the trailing-blank-line bug (extract_signal must take
+# the last NON-EMPTY line of .result).
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"doing some work...\nCOMPLETE\n   "}'
 exit 0
 EOF
 chmod +x "$TMP/fake-bin/claude"
