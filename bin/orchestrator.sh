@@ -298,6 +298,37 @@ write_session_json() {
         > "$fname"
 }
 
+# Commit the per-session JSON (written by the orchestrator AFTER the agent's
+# own commit) onto the run-branch so wind-down's merge carries it to base.
+# Without this, sessions that COMPLETE leave their JSON uncommitted in the
+# worktree — the file is then absent from the project tree's checkout of
+# main after wind-down. Failures swallowed: nothing-to-commit and missing
+# git identity both reduce to no-op rather than tanking the run.
+commit_session_json() {
+    local n="$1"
+    local relpath=".orchestra/runs/$RUN_TS/9-sessions/$(printf '%03d' "$n").json"
+    ( cd "$WORKTREE_DIR" && \
+      git add "$relpath" 2>/dev/null && \
+      git -c user.email=orchestra@local -c user.name=orchestra \
+          commit -q -m "orchestra: session $n metadata" --no-verify -- "$relpath" 2>/dev/null \
+    ) || true
+}
+
+# Publish the run-branch to origin. Called after every per-session bookkeeping
+# commit AND after wind-down — any outcome (HANDOVER, COMPLETE, BLOCKED, all
+# crash categories, wind-down failure). Gives a deep audit trail on origin
+# even if the worktree is later destroyed. Silently no-ops if there is no
+# `origin` remote configured (covers fresh local-only projects + tests).
+# Push failures otherwise warn but do not fail the run.
+publish_run_branch() {
+    ( cd "$WORKTREE_DIR" || exit 0
+      git remote get-url origin >/dev/null 2>&1 || exit 0
+      if ! git push -q --set-upstream origin "$RUN_BRANCH" 2>/dev/null; then
+          echo "warn: failed to push $RUN_BRANCH to origin (continuing)" >&2
+      fi
+    ) || true
+}
+
 run_session_with_watchdog() {
     local prompt="$1"
     local stdout_log="$2"
@@ -563,6 +594,12 @@ EOF
     write_session_json "$session_num" "$started_at" "$ended_at" "$code" "$signal" "$category" \
         || { echo "ERROR: failed writing session JSON (session $session_num, exit $code)" >&2; exit 2; }
 
+    # Commit the orchestrator-written JSON onto the run-branch (else wind-down's
+    # merge won't carry it) and publish the branch to origin for audit. Both
+    # are best-effort and never tank the run.
+    commit_session_json "$session_num"
+    publish_run_branch
+
     echo "─── Session $session_num ended  exit=$code signal=${signal:--} category=${category:--} ───"
 
     # Reset prev_category before potentially setting it from this iteration
@@ -654,6 +691,7 @@ DA_EOF
                     cp "$wd_stderr_log" "$RUN_DIR/wind-down-stderr.txt" 2>/dev/null || true
                     rm -f "$wd_stdout_log" "$wd_stderr_log"
                     echo "Wind-down infrastructure failure (inotifywait) — cannot diagnose further" >&2
+                    publish_run_branch
                     exit 3
                 fi
 
@@ -683,6 +721,7 @@ DA_EOF
                     [ $wd_code -eq 0 ] && failure_cat="B"
                     write_winddown_failed_marker "$failure_cat" "$wd_out" ""
                     print_winddown_recovery "$failure_cat"
+                    publish_run_branch
                     exit 1
                 fi
 
@@ -691,6 +730,7 @@ DA_EOF
                     # push failure. Marker includes 6-HANDOVER.md content.
                     write_winddown_failed_marker "BLOCKED" "$wd_out" "$RUN_DIR/6-HANDOVER.md"
                     print_winddown_recovery "BLOCKED"
+                    publish_run_branch
                     exit 1
                 fi
 
@@ -699,6 +739,7 @@ DA_EOF
                 mkdir -p "$archive_dir"
                 mv "$RUN_DIR" "$archive_dir/$RUN_TS"
                 echo "Run archived at $archive_dir/$RUN_TS"
+                publish_run_branch
                 exit 0
                 ;;
             HANDOVER) sleep "$COOLDOWN"; continue ;;
@@ -725,6 +766,7 @@ The agent could not proceed without an external dependency. See:
 
 After resolving the blocker, prepare a fresh OBJECTIVE.md and run again.
 EOF
+                publish_run_branch
                 exit 0
                 ;;
     esac
@@ -732,8 +774,10 @@ done
 
 if [ $crash_count -ge $MAX_CRASHES ]; then
     echo "Bailing: MAX_CONSECUTIVE_CRASHES reached"
+    publish_run_branch
     exit 1
 fi
 
 echo "MAX_SESSIONS reached without COMPLETE"
+publish_run_branch
 exit 0
