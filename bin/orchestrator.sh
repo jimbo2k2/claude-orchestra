@@ -304,9 +304,13 @@ run_session_with_watchdog() {
     fi
     rm -f "$inotify_err"  # drop after startup; main monitoring uses inotify_log only
 
+    # Tee both streams: the watchdog needs the file (size polling for hang
+    # detection) and the signal parser reads it at the end, but mirroring to
+    # the orchestrator's stdout/stderr surfaces live output in the tmux pane
+    # so a human attaching to the run can see what claude is doing.
     echo "$prompt" | claude --print --dangerously-skip-permissions \
         --model "$MODEL" --effort "$EFFORT" \
-        > "$stdout_log" 2> "$stderr_log" &
+        > >(tee "$stdout_log") 2> >(tee "$stderr_log" >&2) &
     local claude_pid=$!
 
     local last_inotify_size=0
