@@ -45,6 +45,25 @@ CREDENTIALS_FILE="${HOME}/.claude/.credentials.json"
 # would defeat the lock's purpose.
 WINDDOWN_LOCK="$PROJECT_DIR/.orchestra/runs/.wind-down.lock"
 
+# ─── Kickoff banner ─────────────────────────────────────────────────────────
+# One-shot summary printed when the orchestrator starts. Surfaces the things a
+# human attaching to the tmux pane wants to see at a glance: run identity,
+# branch/worktree paths, and the limits the loop will enforce.
+cat <<EOF
+═══════════════════════════════════════════════════════════════
+  orchestra run $RUN_TS
+═══════════════════════════════════════════════════════════════
+  Project       : $PROJECT_DIR
+  Worktree      : $WORKTREE_DIR
+  Run dir       : $RUN_DIR
+  Run branch    : $RUN_BRANCH (base: $BASE_BRANCH)
+  Model/effort  : $MODEL / $EFFORT
+  Limits        : max-sessions=$MAX_SESSIONS  max-consecutive-crashes=$MAX_CRASHES
+  Wind-down lock: $WINDDOWN_LOCK
+═══════════════════════════════════════════════════════════════
+
+EOF
+
 # Spec Section 6.1: orchestrator-owned lock file. Line 1 is the holder PID,
 # line 2 is /proc/<pid>/stat field 22 (process start time in clock ticks).
 # Storing start time defends against PID recycling — a different process
@@ -389,6 +408,19 @@ while [ $session_num -lt $MAX_SESSIONS ] && [ $crash_count -lt $MAX_CRASHES ]; d
     session_num=$((session_num + 1))
     started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
+    # Per-session start banner. Counts open TODOs from 3-TODO.md so the human
+    # has a sense of remaining work between sessions (file is empty on
+    # session 1; the agent populates it as it goes).
+    todo_open=0
+    if [ -f "$RUN_DIR/3-TODO.md" ]; then
+        todo_open=$(grep -c '^\s*-\s\[\s\]' "$RUN_DIR/3-TODO.md" 2>/dev/null || echo 0)
+    fi
+    echo ""
+    echo "─── Session $session_num/$MAX_SESSIONS  (started $started_at, open TODOs: $todo_open) ───"
+    if [ -n "$prev_category" ]; then
+        echo "    recovery preamble: previous session ended Cat $prev_category"
+    fi
+
     # Per spec Section 11: when a previous session ended with a crash
     # category, prepend a damage-assessment preamble so the next session
     # inspects the worktree before resuming the main task.
@@ -481,6 +513,8 @@ EOF
 
     write_session_json "$session_num" "$started_at" "$ended_at" "$code" "$signal" "$category" \
         || { echo "ERROR: failed writing session JSON (session $session_num, exit $code)" >&2; exit 2; }
+
+    echo "─── Session $session_num ended  exit=$code signal=${signal:--} category=${category:--} ───"
 
     # Reset prev_category before potentially setting it from this iteration
     # so it doesn't stay sticky after a successful (non-categorical) session.
