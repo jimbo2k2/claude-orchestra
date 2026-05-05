@@ -122,52 +122,6 @@ that commit) had the full per-phase narrative.
   wait-loop: if dispatch hasn't created the tmux session yet, the
   for-loop's first iteration could `break` prematurely. Add an initial
   sleep, or only `break` after `has-session` previously succeeded.
-- **Add `with-parcel` smoke fixture for parcel-mode wind-down ingestion.**
-  The 2026-05-05 wind-down prompt rewrite added a parcel-mode path
-  (Step 1a detects `Governance/CLAUDE.md` + `Governance/pending/`) that
-  is currently exercised only by the `with-governance` legacy fixture's
-  fallback-mode assertions. Author a third fixture `examples/smoke-test/with-parcel/`
-  containing a minimal `Governance/CLAUDE.md` (parcel format + ingestion
-  algorithm — can be a short version of the logrings-main file) plus
-  `Governance/pending/.gitkeep`, and an `OBJECTIVE.md` that instructs
-  the working session to make a tiny task/decision/changelog/bug change
-  whose governance trail naturally produces parcel content. Add a
-  matching `smoke_assert_with_parcel()` in `bin/orchestra` that asserts:
-  (a) at least one `Governance/pending/<hex>.md` file exists post-merge,
-  (b) the `wind-down: convert run governance to parcels` commit landed,
-  (c) `7-SUMMARY.md` contains a `### Parcel conversion` block, and
-  (d) the parent project's TODO/DECISIONS/CHANGELOG/bug-log were NOT
-  edited (the parcel-mode wind-down's responsibility ends at parcel
-  creation; ingestion is the parent project's W4 responsibility).
-  Wire into `cmd_test` alongside `empty`/`with-governance`/`with-conflict`.
-  Closes the parcel-mode end-to-end gap surfaced by the logrings-main
-  parcel-mechanism plan (`Pipeline/executed/process/2026-04-28-todo-cleanup/plan.md`
-  Phase 9 Task 25).
-- **No existing smoke-test variant exercises session handover.** The
-  current `with-governance` fixture's objective (create two text files,
-  populate three rolling files) completes in one session — the agent
-  emits `COMPLETE` rather than `HANDOVER`, so `MAX_SESSIONS=2` never
-  triggers a second session and `6-HANDOVER.md` stays empty. The handover
-  path (briefing write, next-session pickup, multi-session COMPLETE) is
-  consequently uncovered by `orchestra test`. Two ways to fix:
-    1. **Force-handover variant.** New fixture (e.g. `with-handover/`)
-       whose `OBJECTIVE.md` explicitly instructs the agent to emit
-       `HANDOVER` after completing step N, with a Phase-2 task that
-       must be picked up from the briefing. Assert: ≥2 entries in
-       `9-sessions/`, `6-HANDOVER.md` non-empty mid-run, both Phase-1
-       and Phase-2 work products land before wind-down. Cleanest because
-       it isolates the path; doesn't try to exhaust context.
-    2. **Always-handover hook.** Add a `FORCE_HANDOVER_AFTER_SESSION_N`
-       config knob that causes the orchestrator (not the agent) to
-       inject a synthetic HANDOVER signal after session N exits with
-       COMPLETE, prompting a fresh session against the same objective
-       to verify the briefing-pickup path. Pollutes runtime with a
-       test-only knob; reject unless the fixture approach turns out
-       impossible.
-  Recommend approach 1. Pair this with the `with-parcel` fixture above
-  if both can share an objective (parcel-mode + handover in one run);
-  otherwise keep them separate to keep failure attribution simple.
-
 - `templates/orchestra-CLAUDE.md` is 55 lines (edge of bloat). The
   "Migration from old orchestra" section could collapse to a one-line
   pointer at `MIGRATION.md`. Defensible as-is — leave unless a future
