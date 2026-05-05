@@ -16,58 +16,90 @@ You are running INSIDE the worktree that holds the run-branch checkout.
 
 ## MUST (in this exact order)
 
-### Step 1 — Discover parent governance shape
+### Step 1 — Detect governance mode
 
-1a. Read the parent project's `CLAUDE.md` hierarchy first (root `CLAUDE.md`
-    plus any `CLAUDE.md` files in immediate subdirectories that the root
-    references). If `CLAUDE.md` names governance file paths explicitly
-    (e.g. "decisions live in `docs/decisions/`"), prefer those paths.
+1a. Check whether the parent project has both `Governance/CLAUDE.md`
+    and `Governance/pending/` (a folder). If yes, the project uses the
+    "parcel" mechanism. Proceed to Step 2 (parcel mode).
 
-1b. Otherwise fall back to filename-pattern matching at TWO LEVELS ONLY:
-    project root and `docs/` top-level. Patterns (case-sensitive):
-      - TODO equivalents:      `TODO*` (e.g. TODO.md, TODOS.md, TODO-list.md)
-      - DECISIONS equivalents: `DECISIONS*` (e.g. DECISIONS.md, DECISION-LOG.md)
-      - CHANGELOG equivalents: `CHANGELOG*`, `HISTORY*`, `NEWS*`
+1b. Otherwise the project uses the legacy per-governance-file mechanism.
+    Discover the parent governance shape:
+      - Read parent `CLAUDE.md` for explicit paths.
+      - Otherwise filename-pattern match at TWO LEVELS ONLY (project root
+        and `docs/` top-level): `TODO*`, `DECISIONS*`, `CHANGELOG*` /
+        `HISTORY*` / `NEWS*`.
+    Record the discovered mapping in `__RUN_DIR__/7-SUMMARY.md` under
+    `## Wind-down → ### Governance mapping`. Proceed to Step 2 (legacy mode).
 
-    Do NOT recurse deeper than `docs/`. Do NOT match files in `src/`,
-    `lib/`, `tests/`, etc.
+### Step 2 — Ingest run governance
 
-1c. Record the discovered mapping (or "skipped — no parent file found")
-    for each of TODO, DECISIONS, CHANGELOG in `__RUN_DIR__/7-SUMMARY.md`
-    under a new `## Wind-down` section. Use this format:
+#### Step 2 (parcel mode)
+
+2a. Read `__RUN_DIR__/3-TODO.md`, `__RUN_DIR__/4-DECISIONS.md`,
+    `__RUN_DIR__/5-CHANGELOG.md`. Empty/missing files are skipped.
+
+2b. Convert the present run files into one or more parcel files at
+    `Governance/pending/<hex>.md`, following the parcel format documented
+    at `Governance/CLAUDE.md`. Use judgment: one parcel per logical unit
+    of work (typically one parcel per session, or one parcel for the
+    whole run if it is small and coherent). Each `<hex>` is six lowercase
+    hex chars generated locally (`openssl rand -hex 3`).
+
+2c. For each parcel, populate the relevant `## Task`, `## Decisions`,
+    `## Changelog`, `## Bugs` sections from the corresponding run files.
+    Empty sections are omitted. If `4-DECISIONS.md` has multiple
+    decisions, each one becomes a `### D-1`, `### D-2`, … block within
+    the parcel's `## Decisions` section. Same for bugs (which appear in
+    run sessions if any are captured during work).
+
+2d. `git add Governance/pending/*.md && git commit` with this message:
 
     ```
-    ## Wind-down
-
-    ### Governance mapping
-    - 3-TODO.md      → <path or "(skipped — no parent TODO file found)">
-    - 4-DECISIONS.md → <path or "(skipped — no parent DECISIONS file found)">
-    - 5-CHANGELOG.md → <path or "(skipped — no parent CHANGELOG file found)">
+    wind-down: convert run governance to parcels (<N> parcels created)
     ```
 
-### Step 2 — Ingest run governance into parent shape
+2e. Append a "Parcel conversion" subsection to the `## Wind-down` block
+    of `__RUN_DIR__/7-SUMMARY.md`. Format:
 
-For EACH of the three run-file → parent-file pairs from Step 1c (skipping
+    ```markdown
+    ### Parcel conversion
+
+    - `<hex1>.md`: derived from <run-files folded in>
+    - `<hex2>.md`: derived from <run-files folded in>
+    ...
+    ```
+
+    If no run files had content, write `_No run governance to convert._`.
+
+2f. The W4 ingestion pass on `main` post-merge allocates real T/D/C/B
+    numbers from the parcels and removes them. That work is owned by the
+    parent project's wrap-up protocol, NOT by orchestra. The orchestra
+    wind-down's responsibility ends after step 3 (merge).
+
+#### Step 2 (legacy mode)
+
+For EACH of the three run-file → parent-file pairs from Step 1b (skipping
 any pair where the parent file does not exist):
 
-2a. Read the run file at `__RUN_DIR__/<run-file>` (3-TODO.md, 4-DECISIONS.md,
-    or 5-CHANGELOG.md).
+2a-legacy. Read the run file at `__RUN_DIR__/<run-file>` (3-TODO.md,
+    4-DECISIONS.md, or 5-CHANGELOG.md).
 
-2b. Read the existing parent file. Identify any potential semantic conflicts
-    between the new entries (in the run file) and existing entries (in the
-    parent file). A conflict is: same key/topic with contradictory status,
-    a decision reversal, a TODO that supersedes an earlier TODO, etc. Same
-    key/topic with NON-contradictory new info (e.g. additional commentary
-    on the same decision) is NOT a conflict.
+2b-legacy. Read the existing parent file. Identify any potential semantic
+    conflicts between the new entries (in the run file) and existing
+    entries (in the parent file). A conflict is: same key/topic with
+    contradictory status, a decision reversal, a TODO that supersedes an
+    earlier TODO, etc. Same key/topic with NON-contradictory new info
+    (e.g. additional commentary on the same decision) is NOT a conflict.
 
-2c. Append the run file's new entries (NOT the heading; just the entries)
-    to the bottom of the parent file. Existing parent content MUST be
-    preserved verbatim — do NOT modify, reorder, or remove any existing
-    line. If the parent file documents an "insertion point" (e.g. a
-    comment like `<!-- new entries below -->`), insert there instead of
-    appending to the bottom.
+2c-legacy. Append the run file's new entries (NOT the heading; just the
+    entries) to the bottom of the parent file. Existing parent content
+    MUST be preserved verbatim — do NOT modify, reorder, or remove any
+    existing line. If the parent file documents an "insertion point"
+    (e.g. a comment like `<!-- new entries below -->`), insert there
+    instead of appending to the bottom.
 
-2d. Run `git add <parent-file> && git commit` with the EXACT message:
+2d-legacy. Run `git add <parent-file> && git commit` with the EXACT
+    message:
 
     ```
     wind-down: ingest <run-file> → <parent-file>
@@ -78,10 +110,10 @@ any pair where the parent file does not exist):
     `TODO.md` or `docs/decisions/DECISIONS.md`). The commit message uses
     a literal Unicode arrow `→` (U+2192).
 
-2e. After all three potential ingestions, append a "Potential governance
-    conflicts" subsection to the `## Wind-down` block of
-    `__RUN_DIR__/7-SUMMARY.md`. For each conflict found in 2b, use this
-    EXACT schema:
+2e-legacy. After all three potential ingestions, append a "Potential
+    governance conflicts" subsection to the `## Wind-down` block of
+    `__RUN_DIR__/7-SUMMARY.md`. For each conflict found in 2b-legacy,
+    use this EXACT schema:
 
     ```markdown
     ### Potential governance conflicts
