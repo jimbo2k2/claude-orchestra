@@ -50,6 +50,23 @@ After successful wind-down the folder moves to `.orchestra/runs/archive/<timesta
 - **`BLOCKED` marker** in a run folder: agent halted; read `6-HANDOVER.md` for the blocker. Resolve and start a fresh run.
 - **`WIND-DOWN-FAILED` marker**: wind-down crashed or couldn't complete the merge. The orchestrator's exit message includes copy-paste recovery commands.
 
+## Smoke tests
+
+`orchestra test <variant>` exercises the full run + wind-down lifecycle against a fixture project. **The fixtures live in the canonical orchestra repo only**, not in this project's bundled runtime. Run smoke tests from `~/projects/claude-orchestra/` (or wherever the canonical repo is checked out), not from the bundled `.orchestra/runtime/` here:
+
+```bash
+cd ~/projects/claude-orchestra
+bin/orchestra test empty             # baseline: no parent governance
+bin/orchestra test with-governance   # legacy per-file ingestion (TODO/DECISIONS/CHANGELOG)
+bin/orchestra test with-conflict     # legacy ingestion + conflict-detection in 7-SUMMARY
+bin/orchestra test with-parcel       # parcel-mode wind-down (Governance/pending/<hex>.md)
+bin/orchestra test with-handover     # multi-session HANDOVER → next-session pickup → COMPLETE
+```
+
+Each variant has a fixture folder under `examples/smoke-test/<variant>/` (containing `CLAUDE.md`, `OBJECTIVE.md`, and any pre-populated governance files) and a matching `smoke_assert_<variant>()` in `bin/orchestra`. Each smoke run takes ~3-10 minutes (15 min hard timeout). Output tempdir is `/tmp/orchestra-smoke-<timestamp>-<variant>/` — kept for inspection on PASS or FAIL.
+
+Running `.orchestra/runtime/bin/orchestra test ...` from a project that has the bundled runtime will fail with `Fixture not found` because the bundle deliberately excludes `examples/`.
+
 ## Migration from old orchestra
 
 If you're upgrading an existing orchestra install (the bash-config + governance-paths era), see the orchestra source repo's `MIGRATION.md` and ask Claude to follow that prompt: "follow the orchestra migration prompt at <orchestra-repo>/MIGRATION.md to migrate this project".
