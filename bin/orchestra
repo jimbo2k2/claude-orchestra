@@ -319,6 +319,74 @@ smoke_assert_with_governance() {
     [ "$(cat "$wt/file-b.txt" 2>/dev/null)" = "beta" ]  || die "ASSERT FAIL: file-b.txt"
 }
 
+smoke_assert_with_parcel() {
+    local tmpdir="$1"
+    local wt archive
+    wt=$(find "$tmpdir/wt" -mindepth 1 -maxdepth 1 -type d -name 'run-*' -print -quit 2>/dev/null)
+    [ -n "$wt" ] || die "ASSERT FAIL: no worktree found"
+
+    archive=$(find "$tmpdir/wt" -mindepth 5 -maxdepth 5 -type d -path '*/runs/archive/*' -print -quit 2>/dev/null)
+    [ -n "$archive" ] || die "ASSERT FAIL: no archived run found"
+
+    # (a) At least one parcel file exists at Governance/pending/<hex>.md.
+    local parcel_count
+    parcel_count=$(find "$wt/Governance/pending" -mindepth 1 -maxdepth 1 -type f -name '*.md' -not -name '.gitkeep' 2>/dev/null | wc -l)
+    [ "$parcel_count" -ge 1 ] || die "ASSERT FAIL: no parcel created in Governance/pending/ (parcel-mode wind-down should have converted run governance)"
+
+    # (b) Parcel-conversion commit landed on the merged base.
+    (
+        cd "$wt"
+        git log --grep "wind-down: convert run governance to parcels" --format=%H | grep -q . \
+            || die "ASSERT FAIL: missing 'wind-down: convert run governance to parcels' commit"
+    )
+
+    # (c) 7-SUMMARY.md has a Parcel conversion subsection (per Step 2e parcel-mode schema).
+    local summary="$archive/7-SUMMARY.md"
+    grep -q "Parcel conversion" "$summary" \
+        || die "ASSERT FAIL: 7-SUMMARY.md missing 'Parcel conversion' subsection"
+
+    # (d) Parent project's TODO/DECISIONS/CHANGELOG must NOT have been edited.
+    # The fixture-original entries should still be the only content (plus the trailing newline).
+    grep -q '\[fixture-original\] T001' "$wt/TODO.md" \
+        || die "ASSERT FAIL: TODO.md original lost"
+    ! grep -q '\[smoke-todo\]' "$wt/TODO.md" \
+        || die "ASSERT FAIL: parcel-mode wind-down must NOT edit TODO.md (smoke-todo marker leaked into parent file)"
+
+    grep -q '\[fixture-original\] D001' "$wt/DECISIONS.md" \
+        || die "ASSERT FAIL: DECISIONS.md original lost"
+    ! grep -q '\[smoke-decision\]' "$wt/DECISIONS.md" \
+        || die "ASSERT FAIL: parcel-mode wind-down must NOT edit DECISIONS.md (smoke-decision marker leaked into parent file)"
+
+    grep -q '\[fixture-original\] C001' "$wt/CHANGELOG.md" \
+        || die "ASSERT FAIL: CHANGELOG.md original lost"
+    ! grep -q '\[smoke-changelog\]' "$wt/CHANGELOG.md" \
+        || die "ASSERT FAIL: parcel-mode wind-down must NOT edit CHANGELOG.md (smoke-changelog marker leaked into parent file)"
+
+    # (e) The legacy ingest commits must NOT exist — parcel mode replaces them.
+    (
+        cd "$wt"
+        ! git log --grep "wind-down: ingest 3-TODO.md →" --format=%H | grep -q . \
+            || die "ASSERT FAIL: legacy 'wind-down: ingest 3-TODO.md' commit present in parcel-mode run"
+        ! git log --grep "wind-down: ingest 4-DECISIONS.md →" --format=%H | grep -q . \
+            || die "ASSERT FAIL: legacy 'wind-down: ingest 4-DECISIONS.md' commit present in parcel-mode run"
+        ! git log --grep "wind-down: ingest 5-CHANGELOG.md →" --format=%H | grep -q . \
+            || die "ASSERT FAIL: legacy 'wind-down: ingest 5-CHANGELOG.md' commit present in parcel-mode run"
+    )
+
+    # (f) Markers are preserved INSIDE the parcel file(s).
+    local parcel
+    parcel=$(find "$wt/Governance/pending" -mindepth 1 -maxdepth 1 -type f -name '*.md' -not -name '.gitkeep' -print -quit)
+    grep -q '\[smoke-todo\]' "$parcel" \
+        || die "ASSERT FAIL: parcel missing [smoke-todo] marker (3-TODO content not folded in)"
+    grep -q '\[smoke-decision\]' "$parcel" \
+        || die "ASSERT FAIL: parcel missing [smoke-decision] marker (4-DECISIONS content not folded in)"
+    grep -q '\[smoke-changelog\]' "$parcel" \
+        || die "ASSERT FAIL: parcel missing [smoke-changelog] marker (5-CHANGELOG content not folded in)"
+
+    # Work product from the OBJECTIVE.
+    [ "$(cat "$wt/file-a.txt" 2>/dev/null)" = "alpha" ] || die "ASSERT FAIL: file-a.txt"
+}
+
 smoke_assert_with_conflict() {
     local tmpdir="$1"
     local wt archive
@@ -356,11 +424,61 @@ smoke_assert_with_conflict() {
     )
 }
 
+smoke_assert_with_handover() {
+    local tmpdir="$1"
+    local wt archive
+    wt=$(find "$tmpdir/wt" -mindepth 1 -maxdepth 1 -type d -name 'run-*' -print -quit 2>/dev/null)
+    [ -n "$wt" ] || die "ASSERT FAIL: no worktree found"
+
+    archive=$(find "$tmpdir/wt" -mindepth 5 -maxdepth 5 -type d -path '*/runs/archive/*' -print -quit 2>/dev/null)
+    [ -n "$archive" ] || die "ASSERT FAIL: no archived run found"
+
+    # (a) Exactly 2 session JSON files — Phase 1 (Session 1) + Phase 2 (Session 2).
+    local session_count
+    session_count=$(find "$archive/9-sessions" -mindepth 1 -maxdepth 1 -name '*.json' 2>/dev/null | wc -l)
+    [ "$session_count" -eq 2 ] || die "ASSERT FAIL: expected 2 sessions (HANDOVER then COMPLETE), got $session_count"
+
+    # (b) Final 6-HANDOVER.md may be empty (post-COMPLETE), so check session 001's
+    # commit history instead — Session 1 must have written a non-empty briefing.
+    # The handover briefing is captured in 9-sessions/001.json — confirm it via the
+    # session summary's mention of HANDOVER, plus the handover file's mid-run state.
+    # Pragmatic check: 9-sessions/001.json's exit signal is HANDOVER, and 002.json's
+    # is COMPLETE.
+    local s1_signal s2_signal
+    s1_signal=$(grep -oE '"exit_signal":[[:space:]]*"[A-Z]+"' "$archive/9-sessions/001.json" 2>/dev/null | grep -oE '"[A-Z]+"$' | tr -d '"')
+    s2_signal=$(grep -oE '"exit_signal":[[:space:]]*"[A-Z]+"' "$archive/9-sessions/002.json" 2>/dev/null | grep -oE '"[A-Z]+"$' | tr -d '"')
+    [ "$s1_signal" = "HANDOVER" ] || die "ASSERT FAIL: session 001 exit_signal expected HANDOVER, got '${s1_signal:-<unset>}'"
+    [ "$s2_signal" = "COMPLETE" ] || die "ASSERT FAIL: session 002 exit_signal expected COMPLETE, got '${s2_signal:-<unset>}'"
+
+    # (c) Both work products on the merged base.
+    [ "$(cat "$wt/file-a.txt" 2>/dev/null)" = "alpha" ] || die "ASSERT FAIL: file-a.txt"
+    [ "$(cat "$wt/file-b.txt" 2>/dev/null)" = "beta" ]  || die "ASSERT FAIL: file-b.txt"
+
+    # (d) Both phase markers landed in the parent governance files (legacy ingestion).
+    grep -q 'Phase 1 done' "$wt/TODO.md" || die "ASSERT FAIL: TODO.md missing Phase 1 marker"
+    grep -q 'Phase 2 done' "$wt/TODO.md" || die "ASSERT FAIL: TODO.md missing Phase 2 marker (Session 2 work didn't land)"
+    grep -q 'alpha' "$wt/CHANGELOG.md"   || die "ASSERT FAIL: CHANGELOG.md missing Phase 1 entry"
+    grep -q 'beta'  "$wt/CHANGELOG.md"   || die "ASSERT FAIL: CHANGELOG.md missing Phase 2 entry (Session 2 work didn't land)"
+
+    # (e) Wind-down ingest commits visible (legacy mode).
+    (
+        cd "$wt"
+        git log --grep "wind-down: ingest 3-TODO.md →"      --format=%H | grep -q . || die "ASSERT FAIL: missing TODO ingest commit"
+        git log --grep "wind-down: ingest 4-DECISIONS.md →" --format=%H | grep -q . || die "ASSERT FAIL: missing DECISIONS ingest commit"
+        git log --grep "wind-down: ingest 5-CHANGELOG.md →" --format=%H | grep -q . || die "ASSERT FAIL: missing CHANGELOG ingest commit"
+    )
+
+    # (f) Originals preserved.
+    grep -q '\[fixture-original\] T001' "$wt/TODO.md"      || die "ASSERT FAIL: TODO.md original lost"
+    grep -q '\[fixture-original\] D001' "$wt/DECISIONS.md" || die "ASSERT FAIL: DECISIONS.md original lost"
+    grep -q '\[fixture-original\] C001' "$wt/CHANGELOG.md" || die "ASSERT FAIL: CHANGELOG.md original lost"
+}
+
 cmd_test() {
     local variant="${1:-empty}"
     case "$variant" in
-        empty|with-governance|with-conflict) ;;
-        *) die "Unknown smoke-test variant: $variant (use 'empty', 'with-governance', or 'with-conflict')" ;;
+        empty|with-governance|with-conflict|with-parcel|with-handover) ;;
+        *) die "Unknown smoke-test variant: $variant (use 'empty', 'with-governance', 'with-conflict', 'with-parcel', or 'with-handover')" ;;
     esac
 
     command -v claude >/dev/null 2>&1 \
@@ -436,6 +554,8 @@ EOF
         empty)            smoke_assert_empty "$tmpdir" ;;
         with-governance)  smoke_assert_with_governance "$tmpdir" ;;
         with-conflict)    smoke_assert_with_conflict "$tmpdir" ;;
+        with-parcel)      smoke_assert_with_parcel "$tmpdir" ;;
+        with-handover)    smoke_assert_with_handover "$tmpdir" ;;
     esac
 
     echo ""
