@@ -122,6 +122,27 @@ that commit) had the full per-phase narrative.
   wait-loop: if dispatch hasn't created the tmux session yet, the
   for-loop's first iteration could `break` prematurely. Add an initial
   sleep, or only `break` after `has-session` previously succeeded.
+- **Add `with-parcel` smoke fixture for parcel-mode wind-down ingestion.**
+  The 2026-05-05 wind-down prompt rewrite added a parcel-mode path
+  (Step 1a detects `Governance/CLAUDE.md` + `Governance/pending/`) that
+  is currently exercised only by the `with-governance` legacy fixture's
+  fallback-mode assertions. Author a third fixture `examples/smoke-test/with-parcel/`
+  containing a minimal `Governance/CLAUDE.md` (parcel format + ingestion
+  algorithm — can be a short version of the logrings-main file) plus
+  `Governance/pending/.gitkeep`, and an `OBJECTIVE.md` that instructs
+  the working session to make a tiny task/decision/changelog/bug change
+  whose governance trail naturally produces parcel content. Add a
+  matching `smoke_assert_with_parcel()` in `bin/orchestra` that asserts:
+  (a) at least one `Governance/pending/<hex>.md` file exists post-merge,
+  (b) the `wind-down: convert run governance to parcels` commit landed,
+  (c) `7-SUMMARY.md` contains a `### Parcel conversion` block, and
+  (d) the parent project's TODO/DECISIONS/CHANGELOG/bug-log were NOT
+  edited (the parcel-mode wind-down's responsibility ends at parcel
+  creation; ingestion is the parent project's W4 responsibility).
+  Wire into `cmd_test` alongside `empty`/`with-governance`/`with-conflict`.
+  Closes the parcel-mode end-to-end gap surfaced by the logrings-main
+  parcel-mechanism plan (`Pipeline/executed/process/2026-04-28-todo-cleanup/plan.md`
+  Phase 9 Task 25).
 
 ## Documentation polish
 
