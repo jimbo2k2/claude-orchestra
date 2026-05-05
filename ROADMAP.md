@@ -143,8 +143,30 @@ that commit) had the full per-phase narrative.
   Closes the parcel-mode end-to-end gap surfaced by the logrings-main
   parcel-mechanism plan (`Pipeline/executed/process/2026-04-28-todo-cleanup/plan.md`
   Phase 9 Task 25).
-
-## Documentation polish
+- **No existing smoke-test variant exercises session handover.** The
+  current `with-governance` fixture's objective (create two text files,
+  populate three rolling files) completes in one session — the agent
+  emits `COMPLETE` rather than `HANDOVER`, so `MAX_SESSIONS=2` never
+  triggers a second session and `6-HANDOVER.md` stays empty. The handover
+  path (briefing write, next-session pickup, multi-session COMPLETE) is
+  consequently uncovered by `orchestra test`. Two ways to fix:
+    1. **Force-handover variant.** New fixture (e.g. `with-handover/`)
+       whose `OBJECTIVE.md` explicitly instructs the agent to emit
+       `HANDOVER` after completing step N, with a Phase-2 task that
+       must be picked up from the briefing. Assert: ≥2 entries in
+       `9-sessions/`, `6-HANDOVER.md` non-empty mid-run, both Phase-1
+       and Phase-2 work products land before wind-down. Cleanest because
+       it isolates the path; doesn't try to exhaust context.
+    2. **Always-handover hook.** Add a `FORCE_HANDOVER_AFTER_SESSION_N`
+       config knob that causes the orchestrator (not the agent) to
+       inject a synthetic HANDOVER signal after session N exits with
+       COMPLETE, prompting a fresh session against the same objective
+       to verify the briefing-pickup path. Pollutes runtime with a
+       test-only knob; reject unless the fixture approach turns out
+       impossible.
+  Recommend approach 1. Pair this with the `with-parcel` fixture above
+  if both can share an objective (parcel-mode + handover in one run);
+  otherwise keep them separate to keep failure attribution simple.
 
 - `templates/orchestra-CLAUDE.md` is 55 lines (edge of bloat). The
   "Migration from old orchestra" section could collapse to a one-line
