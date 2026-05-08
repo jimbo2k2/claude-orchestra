@@ -1,10 +1,11 @@
 # Organiser / Executor — implementation plan
 
-Status: draft, pre-implementation. Authored 2026-05-08 from a design
-conversation following the cost audit of run-20260507-141954 (~$960
-overnight, 11 sequential Opus-high working sessions, no model
+Status: Phase 0 complete, ready for Phase 1. Authored 2026-05-08 from
+a design conversation following the cost audit of run-20260507-141954
+(~$960 overnight, 11 sequential Opus-high working sessions, no model
 adaptiveness). Code-reviewed 2026-05-08 against current orchestra
-codebase; review findings folded in.
+codebase; review findings folded in. Phase 0 verification spike run
+2026-05-08 (`/tmp/orchestra-phase0-spike`); findings folded in.
 
 Vocabulary in this plan follows spec Section 2: **run**, **working
 session**, **wind-down session**. "Outer loop" / "inner loop" are used
@@ -19,9 +20,10 @@ executes sequentially" model with a two-tier loop:
   in shape. One headless Claude invocation per working session.
 - **Inner loop**: inside each working session, the Claude instance acts
   as an **Organiser**, dispatching subagent **Executors** to do the
-  actual task work via Claude Code's Task tool. The Organiser holds the
-  plan + governance state in context; Executors only see the slice they
-  need.
+  actual task work via Claude Code's `Agent` tool (the headless-mode
+  name for what the docs sometimes call the Task tool). The Organiser
+  holds the plan + governance state in context; Executors only see the
+  slice they need.
 
 The win is Sonnet-priced execution under Opus-quality direction, with
 the Organiser free to escalate to Opus on the fly when an Executor hits
@@ -45,21 +47,22 @@ ambiguity.
    renames). Dispatching has token + latency overhead; let the Organiser
    judge. **Constraint:** the Organiser does not begin inline edits
    while an Executor is in flight — it waits for `DONE`/`ESCALATE`/
-   `BLOCKED` before touching the workspace itself. Claude Code's Task
-   tool blocks the parent on subagent return so this is the natural
-   shape, but the rule is stated explicitly to kill ambiguity.
+   `BLOCKED` before touching the workspace itself. The Agent tool blocks
+   the parent on subagent return so this is the natural shape, but the
+   rule is stated explicitly to kill ambiguity.
 4. **Verification is the Organiser's call.** No mandatory post-task
    verification. The Organiser may run acceptance commands inline, batch
    verification at the end of a logical group, or dispatch a dedicated
    validation Executor. Project-level Development/ protocols still
    govern what "done" means.
-5. **Full audit trail preserved.** Every Executor invocation (briefing
-   text + raw subagent result JSON) is captured under
-   `.orchestra/runs/<ts>/9-sessions/` so the run can be replayed and
-   reasoned about post-hoc. Note: the subagent's tool-use events are
-   already mechanically captured inside the parent's stream-json
-   transcript at `9-sessions/NNN.json` — the standalone briefing/result
-   files exist for human readability, not data preservation.
+5. **Full audit trail preserved by the parent transcript alone.** Phase 0
+   confirmed that subagent tool-use events (Bash, Write, Edit, Read,
+   etc.) appear inline in the parent's stream-json NDJSON at
+   `9-sessions/NNN.json`, with full input args. The Agent dispatch
+   itself is also captured (subagent_type, briefing prompt, return
+   text). No standalone per-Executor files are needed for data
+   preservation. Post-hoc analysis is done by reading the NDJSON
+   (typically by handing it to Claude for a summary).
 6. **Organiser self-monitors context.** When its own working context
    approaches a configurable threshold, it cleanly winds down any
    in-flight Executor work, writes HANDOVER, and exits — same shape as
@@ -78,9 +81,9 @@ orchestra run
        │    pick next ready task(s)
        │    decide: dispatch, do inline, or escalate
        │    if dispatch:
-       │      build briefing  →  write to 9-sessions/briefings/
-       │      Task tool call  →  subagent runs (sonnet | opus | haiku)
-       │      capture result  →  9-sessions/executor-results/
+       │      Agent tool call  →  subagent runs (sonnet | opus | haiku)
+       │      (briefing prompt + subagent tool-use events
+       │       are captured inline in 9-sessions/NNN.json)
        │      append activity entry → 9-sessions/executor-activity.log
        │      apply result: verify-now | defer-verify | escalate
        │    update CHANGELOG / DECISIONS / TODO as work lands
@@ -200,31 +203,32 @@ heavy templating engine; bash-or-Claude-side string interpolation.
 
 ## Storage layout additions
 
-Briefings and Executor results are machine-output artefacts, so they
-live under `9-sessions/` (per the spec's 1–7 / 9 dichotomy where 1–7 is
-human-facing markdown and `9-sessions/` is machine output):
+Phase 0 confirmed that the parent stream-json transcript at
+`9-sessions/NNN.json` already captures every Agent dispatch (briefing
+prompt + subagent tool-use events + return text) in full. So no
+standalone briefing or result files are needed. The only new artefact
+is a flat activity log, which lives under `9-sessions/` per the spec's
+1–7 / 9 dichotomy:
 
 ```
 .orchestra/runs/<ts>/
 ├── (existing 1-INBOX.md … 7-CHANGELOG.md)
 └── 9-sessions/
-    ├── NNN.json                            (existing parent stream-json)
-    ├── briefings/
-    │   └── <session-id>-<task-id>-<n>.md   exact prompt sent to Executor
-    ├── executor-results/
-    │   └── <session-id>-<task-id>-<n>.json raw subagent result JSON
-    └── executor-activity.log               one line per dispatch (model,
-                                            task id, outcome, duration)
+    ├── NNN.json                  (existing parent stream-json transcript;
+    │                              now also the canonical record of every
+    │                              Executor dispatch inside session N)
+    ├── summary.json              (existing per-session metadata array)
+    └── executor-activity.log     one line per dispatch (model, task id,
+                                  outcome, duration) — fast summary for
+                                  the wind-down report and quick eyeballing
 ```
 
-`<n>` disambiguates retries — escalation re-dispatch of the same task
-id gets `-2`, `-3`, etc. Filename includes session id so chronological
-grouping is obvious without parsing timestamps.
-
 `executor-activity.log` is appended to per dispatch (one CSV-style line:
-timestamp, session-id, task-id, model, outcome, duration_ms). The
+timestamp, session-num, task-id, model, outcome, duration_ms). The
 wind-down session reads this to produce a per-session Executor summary
-in the run report (Phase 4).
+in the run report (Phase 4). Going via this dedicated log is much
+cheaper than parsing every NDJSON event from `NNN.json` just to count
+escalations.
 
 The `runtime/` install path is untouched.
 
@@ -260,11 +264,10 @@ and `ORGANISER_CONTEXT_THRESHOLD` in 50–95.
     transition window). Pass to `claude --model`.
   - Inject the new Organiser system prompt instead of today's "execute
     the next task" framing.
-  - Create `9-sessions/briefings/`, `9-sessions/executor-results/`, and
-    touch `9-sessions/executor-activity.log` at run start.
+  - Touch `9-sessions/executor-activity.log` at run start.
   - Crash detection, wind-down launch — unchanged.
 - `lib/organiser-prompt.txt` (new): defines the inner-loop contract,
-  dispatch protocol, briefing storage rules, escalation handling,
+  dispatch protocol, activity-log append rule, escalation handling,
   override-logging rule, the three exit signals, the
   Organiser-doesn't-edit-while-Executor-in-flight rule, and the
   context-threshold self-check.
@@ -279,13 +282,21 @@ and `ORGANISER_CONTEXT_THRESHOLD` in 50–95.
 
 Sized in sessions per the global convention.
 
-**Phase 0 — verification spike (one session).**
-Confirm Claude Code's Task tool is available in `claude --print`
-headless mode under the orchestrator's invocation flags
-(`--dangerously-skip-permissions`, `--output-format stream-json`).
-Confirm subagent tool-use / tool-result events appear in the parent's
-stream-json transcript at `9-sessions/NNN.json`. If either fails, plan
-needs reshaping before Phase 1. Cheap spike — one short test run.
+**Phase 0 — verification spike (DONE 2026-05-08).**
+Confirmed via `/tmp/orchestra-phase0-spike` running `claude --print
+--dangerously-skip-permissions --model opus --output-format stream-json
+--verbose`:
+- The subagent dispatch tool is exposed as `Agent` (not `Task`) in
+  headless mode. Plan wording updated.
+- Subagent tool-use events (Bash, Write, etc.) appear inline in the
+  parent's NDJSON transcript with full input args. The Agent tool's own
+  call captures the briefing prompt and subagent_type. So the audit
+  trail is complete from `9-sessions/NNN.json` alone — no standalone
+  briefing/result files needed.
+- Subagent runs in the parent's working directory. Shared workspace
+  works as principle 2 assumes.
+- 28-second wall-clock for one trivial Sonnet-style dispatch (default
+  Opus on parent and subagent). Realistic dispatches will be longer.
 
 **Phase 1 — config & prompt scaffolding (one session).**
 Add `ORGANISER_MODEL` (with `MODEL` fallback + deprecation warning) and
@@ -299,14 +310,14 @@ not touched at this stage — it's for major v→v migrations, not config
 key renames.
 
 **Phase 2 — runtime wiring + smoke fixture (one to two sessions).**
-Update `bin/orchestrator.sh` to inject the Organiser prompt and create
-the new `9-sessions/` subdirectories at run start, including the
-activity-log touch. Implement the per-dispatch activity-log append from
-the Organiser prompt (one-line CSV). Add
-`examples/smoke-test/with-organiser/` — a smoke fixture that exercises
-one trivial Sonnet-Executor dispatch end-to-end and asserts the new
-storage paths exist with expected content. Wire into `tests/run-tests.sh`
-under the slow-test guard.
+Update `bin/orchestrator.sh` to inject the Organiser prompt and touch
+`9-sessions/executor-activity.log` at run start. Implement the
+per-dispatch activity-log append from the Organiser prompt (one-line
+CSV). Add `examples/smoke-test/with-organiser/` — a smoke fixture that
+exercises one trivial Sonnet-Executor dispatch end-to-end and asserts
+that (a) the activity log has one entry, (b) `9-sessions/NNN.json`
+contains an `Agent` tool-use event, and (c) the work product landed.
+Wire into `tests/run-tests.sh` under the slow-test guard.
 
 **Phase 3 — escalation & verification flows (one session).**
 End-to-end test of the escalation path: deliberately under-specify a
@@ -336,11 +347,6 @@ logrings phase plan).
 
 ## Open risks & mitigations
 
-- **Subagent transcript capture may be incomplete in headless mode.**
-  Phase 0 verifies. If `tool_use` events for subagents don't appear in
-  the parent's stream-json, the audit-trail story relies entirely on
-  the standalone briefing/result files the Organiser writes — workable
-  but means the Organiser must be diligent about always writing both.
 - **Organiser self-monitoring may be unreliable.** Claude doesn't have a
   perfectly accurate view of its own remaining context. The threshold
   is a hint, not a hard limit. Mitigate with conservative default
