@@ -42,7 +42,8 @@ tests/
 └── test_*.sh                       unit tests (fake claude); plus run-tests.sh runner
 CHANGES.md                          user-facing changes between releases
 ROADMAP.md                          backlog of non-blocking improvements
-MIGRATION.md                        Claude-readable prompt for migrating an old install
+MIGRATION.md                        Claude-readable prompt for migrating an old install (v2→v3)
+MIGRATION-organiser.md              Claude-readable prompt for upgrading a post-v3 install to organiser-executor
 README.md
 ```
 

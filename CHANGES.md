@@ -54,5 +54,10 @@ User-facing changes between releases. For per-version build artifacts
   wall-clock, tasks-with-retries) plus an aggregate ESCALATE rate
   into `7-SUMMARY.md`'s `## Wind-down` block.
 
+- `MIGRATION-organiser.md` — Claude-readable migration prompt for
+  upgrading an existing post-v3 orchestra install in place. Refresh-
+  only (no rearchitecture); the user's CONFIG.md, OBJECTIVE.md, and
+  CLAUDE.md are not touched.
+
 These changes accompany the organiser-executor work (see
 `build-history/organiser-executor/PLAN.md`).
