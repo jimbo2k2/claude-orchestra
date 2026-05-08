@@ -56,6 +56,15 @@ that commit) had the full per-phase narrative.
   generic "command failed". A preflight check
   (`[ -f "$WORKTREE_DIR/.orchestra/runtime/lib/winddown-prompt.txt" ] \
    || die "wind-down prompt template missing"`) gives a cleaner error.
+- `bin/orchestrator.sh` `build_session_prompt` has the same blind-cat
+  exposure for `lib/organiser-prompt.txt`: if the file is missing
+  (e.g. project on an older orchestra runtime that hasn't been
+  migrated per MIGRATION-organiser.md), the working session boots
+  with an empty prompt and Claude flounders. Same fix shape: preflight
+  check at orchestrator startup that all four runtime files exist
+  (`config.sh`, `winddown-prompt.txt`, `organiser-prompt.txt`,
+  `executor-prompt-template.txt`), `die` with a pointer at
+  `MIGRATION-organiser.md` if any are missing.
 
 ## Diagnostics & UX
 
@@ -122,7 +131,8 @@ that commit) had the full per-phase narrative.
   wait-loop: if dispatch hasn't created the tmux session yet, the
   for-loop's first iteration could `break` prematurely. Add an initial
   sleep, or only `break` after `has-session` previously succeeded.
-- `templates/orchestra-CLAUDE.md` is 55 lines (edge of bloat). The
-  "Migration from old orchestra" section could collapse to a one-line
-  pointer at `MIGRATION.md`. Defensible as-is — leave unless a future
-  review finds it noisy.
+- `templates/orchestra-CLAUDE.md` length is creeping up (~78 lines as of
+  the organiser-executor change, up from 55). Defensible — the migration
+  section now lists two prompts (v2→v3 and v3→organiser) — but worth
+  watching. If a future change adds a third migration pointer, factor
+  out a `MIGRATIONS-INDEX.md` and link it.

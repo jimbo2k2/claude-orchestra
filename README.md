@@ -10,6 +10,14 @@ You point orchestra at a project, give it an objective, and it spawns Claude in 
 
 You can leave it running overnight. It paces itself against the Claude subscription quota and recovers from session crashes.
 
+## Architecture: Organiser + Executor
+
+Inside each working session the Claude instance acts as an **Organiser** that holds the run plan and governance state in context, and dispatches **Executor** subagents (via Claude Code's `Agent` tool) to do the actual task work. The Organiser decides per-task which model to dispatch — Sonnet by default for clear, bounded work; Opus for ambiguous design or cross-file judgement; Haiku for very mechanical edits. It runs verifications, escalates retries on the same task-id when an Executor returns `ESCALATE` or fails verification (two-attempt cap before going inline), and self-winds-down when its own context approaches `ORGANISER_CONTEXT_THRESHOLD`.
+
+The motivation is cost. An overnight Opus-on-everything run is expensive; this pattern lets the Opus-quality direction sit at the Organiser layer while Sonnet executes the bulk of bounded sub-tasks at lower per-token cost. The Organiser still handles ambiguity itself or escalates to Opus on demand.
+
+The contract is in [`lib/organiser-prompt.txt`](lib/organiser-prompt.txt); the briefing skeleton is in [`lib/executor-prompt-template.txt`](lib/executor-prompt-template.txt). Per-dispatch records land in `9-sessions/executor-activity.log` (one CSV line per Agent call), which the wind-down session reads to produce a per-run Executor summary in `7-SUMMARY.md`.
+
 ## Prerequisites
 
 - [Claude Code CLI](https://docs.claude.com/en/docs/claude-code), globally installed and authenticated.
@@ -90,7 +98,7 @@ bin/
 lib/
 ├── config.sh                       CONFIG.md parser + validation (sourced)
 ├── winddown-prompt.txt             wind-down agent contract template
-├── organiser-prompt.txt            Organiser inner-loop contract (Phase 1; wiring lands in Phase 2)
+├── organiser-prompt.txt            Organiser inner-loop contract (loaded by orchestrator.sh)
 └── executor-prompt-template.txt    Executor briefing skeleton
 
 templates/
@@ -115,7 +123,8 @@ tests/                     unit tests (fake claude); plus run-tests.sh runner
 
 CHANGES.md                 user-facing changes between releases
 ROADMAP.md                 backlog of non-blocking improvements
-MIGRATION.md               Claude-readable prompt for upgrading older installs
+MIGRATION.md               Claude-readable prompt for v2-era → v3 install upgrade
+MIGRATION-organiser.md     Claude-readable prompt for adding the organiser-executor runtime to a post-v3 install
 ```
 
 ## Run-time storage layout
@@ -131,8 +140,9 @@ Inside the run worktree at `<WORKTREE_BASE>/run-<ts>/.orchestra/runs/<ts>/`:
 6-HANDOVER.md       briefing for the next session (regenerated each session)
 7-SUMMARY.md        rolling per-session narrative
 9-sessions/
-├── NNN.json        raw stream-json transcript per session (NDJSON; always archived)
-└── summary.json    one metadata entry per session (timestamps, exit code, signal, crash category)
+├── NNN.json                  raw stream-json transcript per session (NDJSON; always archived)
+├── summary.json              one metadata entry per session (timestamps, exit code, signal, crash category)
+└── executor-activity.log     one CSV line per Agent dispatch (timestamp, session, task-id, model, outcome, duration)
 ```
 
 After a successful wind-down the run folder moves to `.orchestra/runs/archive/<ts>/`.

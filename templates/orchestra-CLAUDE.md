@@ -68,6 +68,11 @@ Each variant has a fixture folder under `examples/smoke-test/<variant>/` (contai
 
 Running `.orchestra/runtime/bin/orchestra test ...` from a project that has the bundled runtime will fail with `Fixture not found` because the bundle deliberately excludes `examples/`.
 
-## Migration from old orchestra
+## Migration from older orchestra installs
 
-If you're upgrading an existing orchestra install (the bash-config + governance-paths era), see the orchestra source repo's `MIGRATION.md` and ask Claude to follow that prompt: "follow the orchestra migration prompt at <orchestra-repo>/MIGRATION.md to migrate this project".
+Two Claude-readable migration prompts live in the orchestra source repo, depending on what install you're starting from:
+
+- **`MIGRATION.md`** — for v2-era installs (bash config in `.orchestra/config`, hooks in `.orchestra/hooks/`, governance paths in config). Heavyweight: file moves, config rename, hook removal.
+- **`MIGRATION-organiser.md`** — for post-v3 installs adding the organiser-executor runtime (the `lib/organiser-prompt.txt` + `lib/executor-prompt-template.txt` Agent-tool dispatch model). Refresh-only: idempotent re-run of `orchestra init`.
+
+To migrate, ask Claude: "follow the orchestra migration prompt at `<orchestra-repo>/MIGRATION.md`" (or `MIGRATION-organiser.md`, as appropriate) — Claude will read the file and walk you through it.

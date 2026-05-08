@@ -6,6 +6,17 @@ hangs/crashes, runs a wind-down session that ingests run-level governance
 into the parent project's governance shape, then merges to the base
 branch.
 
+Inside each working session the Claude instance acts as an **Organiser**
+that holds the plan + governance state in context and dispatches
+**Executor** subagents (via Claude Code's `Agent` tool) to do the actual
+task work. The Organiser decides per-task which model to dispatch
+(typically Sonnet for bounded execution, Opus for ambiguous design),
+runs verifications, escalates on the same task-id when an Executor
+returns `ESCALATE` or fails verification, and self-winds-down when its
+own context approaches `ORGANISER_CONTEXT_THRESHOLD`. The contract is
+in `lib/organiser-prompt.txt`; the briefing skeleton the Organiser
+fills at dispatch time is in `lib/executor-prompt-template.txt`.
+
 ## Tech stack
 
 Bash, git, tmux, jq, inotify-tools. Linux-only.
@@ -19,8 +30,8 @@ bin/
 lib/
 ├── config.sh                       CONFIG.md parser + validation (sourced)
 ├── winddown-prompt.txt             wind-down agent contract template
-├── organiser-prompt.txt            Organiser inner-loop contract (Phase 1; wired in Phase 2)
-└── executor-prompt-template.txt    Executor briefing skeleton
+├── organiser-prompt.txt            Organiser inner-loop contract (loaded by orchestrator.sh)
+└── executor-prompt-template.txt    Executor briefing skeleton (Organiser fills at dispatch time)
 templates/
 ├── CONFIG.md                       user-editable runtime config (canonical key list)
 ├── OBJECTIVE.md                    user-editable run brief
@@ -62,6 +73,11 @@ README.md
   `<WORKTREE_BASE>/run-<ts>/.orchestra/runs/<ts>/`. The project tree's
   `.orchestra/runs/<ts>/` is just the atomic-mkdir uniqueness gate
   (Section 7 of the spec).
+- `9-sessions/` holds machine-output artefacts: per-session NDJSON
+  transcripts (`NNN.json`), the rolling per-session metadata array
+  (`summary.json`), and the Executor activity log
+  (`executor-activity.log`, one CSV line per Agent dispatch — read by
+  the wind-down session to produce the per-run Executor summary).
 
 ## Vocabulary (per spec Section 2)
 
@@ -80,10 +96,19 @@ README.md
 ## Where things live
 
 - **Spec (canonical):** `build-history/archive/v0-cleanup/2026-04-29-orchestra-cleanup-design.md`
-- **Plan:** `build-history/archive/v0-cleanup/2026-04-29-orchestra-cleanup-plan.md`
+- **Plan (cleanup rewrite):** `build-history/archive/v0-cleanup/2026-04-29-orchestra-cleanup-plan.md`
+- **Plan (organiser-executor, current):** `build-history/organiser-executor/PLAN.md`
+- **Organiser contract:** `lib/organiser-prompt.txt` (system prompt
+  injected into every working session by `orchestrator.sh`)
+- **Executor briefing template:** `lib/executor-prompt-template.txt`
 - **Smoke fixtures:** `examples/smoke-test/{empty,with-governance,with-conflict,with-handover,with-parcel,with-organiser,with-escalation,with-verify}/`
-- **Migration prompt:** `MIGRATION.md` (Claude-readable; for users coming
-  from an older orchestra install)
+- **Migration prompts:**
+  - `MIGRATION.md` — for v2-era installs upgrading to the v3 cleanup
+    layout (heavyweight rearchitecture; file moves, config rename
+    bash → markdown, hook removal).
+  - `MIGRATION-organiser.md` — for post-v3 installs adding the
+    organiser-executor runtime (refresh-only; idempotent re-run of
+    `orchestra init`).
 - **Backlog:** `ROADMAP.md` (non-blocking improvements identified during
   the rewrite — hardening, diagnostics, refactor, test coverage)
 - **Releases:** `CHANGES.md` (user-facing changes between releases)
