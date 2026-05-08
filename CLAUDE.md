@@ -14,30 +14,32 @@ Bash, git, tmux, jq, inotify-tools. Linux-only.
 
 ```
 bin/
-├── orchestra              CLI dispatcher (init, run, status, test, reset)
-└── orchestrator.sh        session loop — runs inside the run worktree's tmux
+├── orchestra                       CLI dispatcher (init, run, status, test, reset)
+└── orchestrator.sh                 session loop — runs inside the run worktree's tmux
 lib/
-├── config.sh              CONFIG.md parser + validation (sourced)
-└── winddown-prompt.txt    wind-down agent contract template
+├── config.sh                       CONFIG.md parser + validation (sourced)
+├── winddown-prompt.txt             wind-down agent contract template
+├── organiser-prompt.txt            Organiser inner-loop contract (Phase 1; wired in Phase 2)
+└── executor-prompt-template.txt    Executor briefing skeleton
 templates/
-├── CONFIG.md              user-editable runtime config
-├── OBJECTIVE.md           user-editable run brief
-└── orchestra-CLAUDE.md    agent-facing guidance for the installed `.orchestra/`
+├── CONFIG.md                       user-editable runtime config (canonical key list)
+├── OBJECTIVE.md                    user-editable run brief
+└── orchestra-CLAUDE.md             agent-facing guidance for the installed `.orchestra/`
 examples/
 └── smoke-test/
-    ├── empty/             no parent governance — exercises no-op ingestion
-    ├── with-governance/   pre-populated TODO/DECISIONS/CHANGELOG
-    └── with-conflict/     contradicting decision — exercises conflict surfacing
-docs/
-├── superpowers/
-│   ├── specs/             design spec (canonical)
-│   ├── plans/             implementation plan
-│   ├── code-review-followups.md   minor items deferred to wrap-up
-│   └── RESUME.md          handover notes between rewrite sessions
-└── archive/               historical v2 docs (kept as history)
+    ├── empty/                      no parent governance — exercises no-op ingestion
+    ├── with-governance/            pre-populated TODO/DECISIONS/CHANGELOG
+    ├── with-conflict/              contradicting decision — exercises conflict surfacing
+    ├── with-handover/              multi-session HANDOVER → COMPLETE flow
+    └── with-parcel/                parent uses Governance/pending/ parcel ingestion
+build-history/
+├── archive/<version>/              frozen per-version specs, plans, transcripts
+└── <topic>/                        active design work in progress (e.g. organiser-executor/)
 tests/
-└── test_*.sh              unit tests (fake claude); plus run-tests.sh runner
-MIGRATION.md               Claude-readable prompt for migrating an old install
+└── test_*.sh                       unit tests (fake claude); plus run-tests.sh runner
+CHANGES.md                          user-facing changes between releases
+ROADMAP.md                          backlog of non-blocking improvements
+MIGRATION.md                        Claude-readable prompt for migrating an old install
 README.md
 ```
 
@@ -75,13 +77,16 @@ README.md
 
 - **Spec (canonical):** `build-history/archive/v0-cleanup/2026-04-29-orchestra-cleanup-design.md`
 - **Plan:** `build-history/archive/v0-cleanup/2026-04-29-orchestra-cleanup-plan.md`
-- **Smoke fixtures:** `examples/smoke-test/{empty,with-governance,with-conflict}/`
+- **Smoke fixtures:** `examples/smoke-test/{empty,with-governance,with-conflict,with-handover,with-parcel}/`
 - **Migration prompt:** `MIGRATION.md` (Claude-readable; for users coming
   from an older orchestra install)
 - **Backlog:** `ROADMAP.md` (non-blocking improvements identified during
   the rewrite — hardening, diagnostics, refactor, test coverage)
+- **Releases:** `CHANGES.md` (user-facing changes between releases)
 - **Build history:** `build-history/archive/<version>/` (per-version spec,
-  plan, RESUME, and Claude transcripts that produced this codebase)
+  plan, RESUME, and Claude transcripts that produced this codebase).
+  Active in-progress design work lives under `build-history/<topic>/` at
+  the top level until shipped, then archives.
 
 ## What this project does NOT have an opinion on
 

@@ -1,155 +1,155 @@
 # claude-orchestra
 
-Autonomous multi-session orchestrator for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Runs Claude in headless mode across multiple sessions with protocol-driven task execution, git worktree isolation, config-driven governance, crash recovery, and quota pacing.
+Autonomous multi-session orchestrator for [Claude Code](https://docs.claude.com/en/docs/claude-code). Runs Claude in headless mode (`claude --print`) across multiple working sessions inside an isolated git worktree, watches for hangs and crashes, then runs a wind-down session that ingests the run's governance into the parent project's governance shape and merges back into the base branch.
 
-## v3 Architecture
+Linux-only. Bash, git, tmux, jq, inotify-tools.
 
-Orchestra v3 is **project-local** — no global install, no `~/claude-scripts/`. Everything lives in `.orchestra/` within your project.
+## What it does
 
-Key changes from v2:
-- **Protocol-driven:** sessions follow `DEVELOPMENT-PROTOCOL.md` (a 20-step task sequence with gates)
-- **Config-driven:** all run parameters in `.orchestra/config` — no env vars, no CLI args
-- **Worktree isolation:** each run gets a persistent git worktree so your main working tree stays on `main`
-- **Single settings.json:** no more settings swap between interactive and autonomous
-- **Staging hook only:** Stop hooks removed — the protocol defines when commits happen
+You point orchestra at a project, give it an objective, and it spawns Claude in a tmux session inside a fresh git worktree. Each Claude invocation is a **working session** that makes progress, writes a HANDOVER briefing, and exits — orchestra spawns the next one until Claude emits `COMPLETE`, `BLOCKED`, or limits are hit. After a successful `COMPLETE`, a single **wind-down session** ingests the run's TODO/DECISIONS/CHANGELOG into the parent project's existing governance files and merges the run-branch.
 
-## How it works
+You can leave it running overnight. It paces itself against the Claude subscription quota and recovers from session crashes.
 
-1. You set `TASKS=T001,T002,T003` in `.orchestra/config`
-2. Orchestra creates a tmux session and a persistent git worktree for the run
-3. Claude reads `DEVELOPMENT-PROTOCOL.md` and follows it in auto-proceed mode
-4. Each task gets its own branch within the worktree, merged back into the session branch
-5. Governance files (TODO, DECISIONS, CHANGELOG) are synced back to the main tree
-6. Between sessions, the worktree is reset to a clean state and reused
-7. Orchestra spawns the next session until all tasks are complete
-8. The worktree is preserved after the run for human review
+## Prerequisites
 
-## Installation
+- [Claude Code CLI](https://docs.claude.com/en/docs/claude-code), globally installed and authenticated.
+- `git`, `tmux`, `jq`, `inotify-tools`.
+- A target project that is itself a git repo.
+
+## Install
 
 ```bash
-git clone https://github.com/jimbo2k2/claude-orchestra.git
+git clone https://github.com/jimbo2k2/claude-orchestra.git ~/tools/claude-orchestra
 cd /path/to/your/project
-/path/to/claude-orchestra/install.sh
+~/tools/claude-orchestra/bin/orchestra init
 ```
 
-This copies scripts into `.orchestra/bin/`, `.orchestra/hooks/`, `.orchestra/lib/` and creates governance directories if needed. No global PATH changes required.
-
-### Prerequisites
-
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (globally installed)
-- `jq` for JSON processing
-- `git`
-- `tmux`
+`orchestra init` scaffolds `.orchestra/` inside your project: it copies the runtime scripts into `.orchestra/runtime/` (so the project pins its own copy) and creates editable templates `CONFIG.md` and `OBJECTIVE.md`. No global PATH changes, no `~/`-level state.
 
 ## Quick start
 
 ```bash
-# 1. Bootstrap orchestra into your project
-/path/to/claude-orchestra/install.sh
+# 1. Scaffold orchestra into your project (once)
+~/tools/claude-orchestra/bin/orchestra init
 
-# 2. Configure
-$EDITOR .orchestra/config          # Set TASKS, governance paths, WORKTREE_BASE
-$EDITOR .orchestra/toolchain.md    # Add your build/test commands
+# 2. Edit the run config
+$EDITOR .orchestra/CONFIG.md          # MAX_SESSIONS, ORGANISER_MODEL, WORKTREE_BASE, BASE_BRANCH
+$EDITOR .orchestra/OBJECTIVE.md       # what this run is for
+$EDITOR .orchestra/INBOX.md           # optional: cold-start briefing
 
-# 3. Create development protocol (or use the template)
-$EDITOR DEVELOPMENT-PROTOCOL.md
+# 3. Run
+.orchestra/runtime/bin/orchestra run
 
-# 4. Add tasks to TODO
-$EDITOR TODO/TODO.md
-
-# 5. Run
-.orchestra/bin/orchestra run       # Starts in tmux with worktree isolation
-
-# 6. Monitor
-tmux attach -t orchestra           # Watch live
-.orchestra/bin/orchestra status    # Progress summary
+# 4. Watch
+tmux attach -t orchestra-<project>    # live tail
+.orchestra/runtime/bin/orchestra status
 ```
-
-### Passing queue-specific context
-
-Write to `.orchestra/INBOX.md` before launching. The session reads it at startup — it functions as a cold-start briefing for this run.
 
 ## Commands
 
-### `.orchestra/bin/orchestra run`
-
-Starts the session loop in a tmux session. Creates one persistent git worktree for the run (named by run timestamp). Runs until all assigned tasks are complete, BLOCKED, or limits reached. The worktree is preserved after the run for review.
-
-### `.orchestra/bin/orchestra test`
-
-Smoke test — creates a throwaway worktree, runs a synthetic task through the full protocol, reports which steps and gates fired, cleans up.
-
-### `.orchestra/bin/orchestra status`
-
-Shows current progress: tasks assigned vs complete, sessions logged.
-
-### `.orchestra/bin/orchestra reset [--label NAME]`
-
-Archives session state (HANDOVER, session logs) and resets for the next run. Governance files are untouched.
+| Command | Purpose |
+|---------|---------|
+| `orchestra init [dir]` | Scaffold `.orchestra/` into the target project (default: current directory). |
+| `orchestra run` | Start a run in tmux. Reads `.orchestra/CONFIG.md` + `.orchestra/OBJECTIVE.md`. |
+| `orchestra status` | Summarise the current or most recent run. |
+| `orchestra test [variant]` | Smoke test — throwaway worktree, synthetic task, full lifecycle, asserts and cleans up. Variants: `empty`, `with-governance`, `with-conflict`, `with-handover`, `with-parcel`. |
+| `orchestra reset` | Archive current run state, reset for the next run. Governance files untouched. |
 
 ## Configuration
 
-All settings live in `.orchestra/config`. No env vars, no CLI args.
+All run parameters live in `.orchestra/CONFIG.md` as markdown bullets (`- KEY: VALUE`). No env vars, no CLI args. The full key list with defaults lives in [`templates/CONFIG.md`](templates/CONFIG.md). Headline keys:
 
-```ini
-TASKS=T001,T002,T003          # Comma-separated T-numbers
-MAX_SESSIONS=10                # Session limit
-MODEL=opus                     # Default model
-EFFORT=high                    # Default effort
-WORKTREE_BASE=/tmp/orchestra   # Worktree parent (run folder created inside)
-TMUX_SESSION=orchestra         # Tmux session name
-QUOTA_PACING=true              # Pause when quota is high
-QUOTA_THRESHOLD=80             # Utilization % to trigger pause
-TODO_FILE=TODO/TODO.md         # Governance paths
-DECISIONS_FILE=Decisions/DECISIONS.md
-CHANGELOG_FILE=Changelog/CHANGELOG.md
-DEVELOPMENT_PROTOCOL=DEVELOPMENT-PROTOCOL.md
-TOOLCHAIN_FILE=.orchestra/toolchain.md
+| Key | Required | Default | Notes |
+|-----|----------|---------|-------|
+| `MAX_SESSIONS` | yes | — | Hard upper bound on working sessions per run. |
+| `MAX_CONSECUTIVE_CRASHES` | yes | — | Run aborts after this many crashes in a row. |
+| `ORGANISER_MODEL` | yes | — | `opus`, `sonnet`, or `haiku`. (Legacy `MODEL` still accepted with a deprecation warning.) |
+| `EFFORT` | no | `high` | `low`, `medium`, or `high`. |
+| `WORKTREE_BASE` | yes | — | Absolute path; runs create `<WORKTREE_BASE>/run-<ts>/`. |
+| `BASE_BRANCH` | yes | — | Branch the run-branch is cut from and merged back to. |
+| `ORGANISER_CONTEXT_THRESHOLD` | no | `75` | Integer percent; when reached, the Organiser self-winds-down to HANDOVER. |
+| `MAX_HANG_SECONDS` | no | `1200` | Watchdog kills Claude if its log file stops growing for this long. |
+| `QUOTA_PACING` | no | `true` | Pause new sessions while Claude subscription utilisation is high. |
+| `QUOTA_THRESHOLD` | no | `80` | Utilisation percent at which pacing kicks in. |
+
+See [`CHANGES.md`](CHANGES.md) for recent changes.
+
+## Vocabulary (per spec)
+
+- **Run** — one user-initiated unit of work, defined by `OBJECTIVE.md`. One run = one git worktree, one tmux session, one run-branch.
+- **Working session** — one `claude --print` invocation within a run. Sessions repeat (HANDOVER → next session) until the agent emits `COMPLETE`, `BLOCKED`, or limits are hit.
+- **Wind-down session** — one final Claude invocation, exempt from `MAX_SESSIONS`, that runs only after `COMPLETE`. Ingests run governance into the parent project's governance, merges the run-branch into base.
+
+## Repository layout
+
+```
+bin/
+├── orchestra              CLI dispatcher (init, run, status, test, reset)
+└── orchestrator.sh        session loop — runs inside the run worktree's tmux
+
+lib/
+├── config.sh                       CONFIG.md parser + validation (sourced)
+├── winddown-prompt.txt             wind-down agent contract template
+├── organiser-prompt.txt            Organiser inner-loop contract (Phase 1; wiring lands in Phase 2)
+└── executor-prompt-template.txt    Executor briefing skeleton
+
+templates/
+├── CONFIG.md              user-editable runtime config (canonical key list)
+├── OBJECTIVE.md           user-editable run brief
+└── orchestra-CLAUDE.md    agent-facing guidance for the installed .orchestra/
+
+examples/smoke-test/
+├── empty/                 no parent governance — exercises no-op ingestion
+├── with-governance/       pre-populated TODO/DECISIONS/CHANGELOG
+├── with-conflict/         contradicting decision — exercises conflict surfacing
+├── with-handover/         multi-session HANDOVER → COMPLETE flow
+└── with-parcel/           parent uses Governance/pending/ parcel ingestion
+
+build-history/             per-version specs, plans, and Claude transcripts that
+                           produced this codebase (frozen historical record)
+
+tests/                     unit tests (fake claude); plus run-tests.sh runner
+
+CHANGES.md                 user-facing changes between releases
+ROADMAP.md                 backlog of non-blocking improvements
+MIGRATION.md               Claude-readable prompt for upgrading older installs
 ```
 
-## Directory layout
+## Run-time storage layout
+
+Inside the run worktree at `<WORKTREE_BASE>/run-<ts>/.orchestra/runs/<ts>/`:
 
 ```
-your-project/
-├── DEVELOPMENT-PROTOCOL.md     # Authoritative task sequence
-├── .orchestra/
-│   ├── config                  # All run parameters
-│   ├── bin/
-│   │   ├── orchestra           # CLI entry point
-│   │   └── orchestrator.sh     # Session loop
-│   ├── hooks/
-│   │   └── stage-changes.sh    # PostToolUse hook (staging only)
-│   ├── lib/
-│   │   ├── config.sh           # Config reader + preflight
-│   │   ├── verify-completion.sh # Invoked by orchestrator, not hooks
-│   │   └── commit-and-update.sh # Invoked by orchestrator, not hooks
-│   ├── sessions/               # Per-task workspaces + session logs
-│   │   └── archive/
-│   ├── CLAUDE.md               # Autonomous session rules
-│   ├── README.md               # Quick reference
-│   ├── toolchain.md            # Stack-specific commands
-│   ├── HANDOVER.md             # Session-to-session context
-│   └── INBOX.md                # Human async messages
-├── .claude/
-│   └── settings.json           # Staging hook only
-├── CLAUDE.md                   # Project instructions
-├── TODO/                       # Governance (path configurable)
-├── Decisions/
-└── Changelog/
+1-INBOX.md          human → agent messages
+2-OBJECTIVE.md      run brief (copied from project)
+3-TODO.md           rolling task list (agent-maintained)
+4-DECISIONS.md      rolling design decisions
+5-CHANGELOG.md      what changed in this run
+6-HANDOVER.md       briefing for the next session (regenerated each session)
+7-SUMMARY.md        rolling per-session narrative
+9-sessions/
+├── NNN.json        raw stream-json transcript per session (NDJSON; always archived)
+└── summary.json    one metadata entry per session (timestamps, exit code, signal, crash category)
 ```
+
+After a successful wind-down the run folder moves to `.orchestra/runs/archive/<ts>/`.
 
 ## Crash recovery
 
-If a session crashes:
-1. Orchestra syncs governance files from the worktree
-2. Creates a recovery commit if partial work exists
-3. Spawns a recovery session that assesses damage before continuing
-
-After `MAX_CONSECUTIVE_CRASHES` in a row, the orchestrator stops.
+If a working session crashes or hangs, orchestra classifies it (Cat A/B/C/D), prepends a recovery preamble to the next session's prompt, and continues. After `MAX_CONSECUTIVE_CRASHES` in a row the run aborts cleanly. Wind-down does not run on aborted runs — the run worktree is preserved for human inspection.
 
 ## Quota pacing
 
-Enabled by default. Before each session, checks subscription utilization via the OAuth usage endpoint. If the 5-hour window exceeds `QUOTA_THRESHOLD`, pauses until it resets. Safe to leave running overnight.
+Enabled by default. Before each working session, orchestra checks Claude subscription utilisation. If the rolling 5-hour window exceeds `QUOTA_THRESHOLD`, it sleeps until the window resets. Designed for overnight runs that span multiple quota windows.
+
+## Tests
+
+```bash
+tests/run-tests.sh          # full suite
+tests/run-tests.sh --fast   # skip the long real-time-wait tests (hang detection, smoke)
+```
+
+Run the full suite at end-of-phase / pre-merge.
 
 ## License
 
