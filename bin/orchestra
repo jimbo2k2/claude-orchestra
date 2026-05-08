@@ -55,6 +55,8 @@ cmd_init() {
     fi
     cp "$LIB_DIR/config.sh" "$orch/runtime/lib/config.sh"
     cp "$LIB_DIR/winddown-prompt.txt" "$orch/runtime/lib/winddown-prompt.txt"
+    cp "$LIB_DIR/organiser-prompt.txt" "$orch/runtime/lib/organiser-prompt.txt"
+    cp "$LIB_DIR/executor-prompt-template.txt" "$orch/runtime/lib/executor-prompt-template.txt"
 
     # Copy templates only if missing — never overwrite user content.
     # Each entry: "<template-filename>:<dest-filename>". Most are identity;
@@ -134,6 +136,9 @@ cmd_run() {
     # Build the run folder INSIDE the worktree (per spec Section 5)
     local wt_run_dir="$worktree_dir/.orchestra/runs/$run_ts"
     mkdir -p "$wt_run_dir/9-sessions"
+    # Activity log for Executor dispatches — the Organiser appends one
+    # CSV line per Agent dispatch (timestamp,session,task,model,outcome,duration).
+    : > "$wt_run_dir/9-sessions/executor-activity.log"
     cp "$worktree_dir/.orchestra/OBJECTIVE.md" "$wt_run_dir/2-OBJECTIVE.md"
     : > "$wt_run_dir/1-INBOX.md"
     : > "$wt_run_dir/3-TODO.md"
@@ -481,11 +486,62 @@ smoke_assert_with_handover() {
     grep -q '\[fixture-original\] C001' "$wt/CHANGELOG.md" || die "ASSERT FAIL: CHANGELOG.md original lost"
 }
 
+smoke_assert_with_organiser() {
+    local tmpdir="$1"
+    local wt archive
+    wt=$(find "$tmpdir/wt" -mindepth 1 -maxdepth 1 -type d -name 'run-*' -print -quit 2>/dev/null)
+    [ -n "$wt" ] || die "ASSERT FAIL: no worktree found"
+
+    archive=$(find "$tmpdir/wt" -mindepth 5 -maxdepth 5 -type d -path '*/runs/archive/*' -print -quit 2>/dev/null)
+    [ -n "$archive" ] || die "ASSERT FAIL: no archived run found"
+
+    # (a) Single working session ran to COMPLETE.
+    local session_count
+    session_count=$(find "$archive/9-sessions" -mindepth 1 -maxdepth 1 -name '[0-9]*.json' 2>/dev/null | wc -l)
+    [ "$session_count" -eq 1 ] || die "ASSERT FAIL: expected exactly 1 session transcript, got $session_count"
+
+    local s1_signal
+    s1_signal=$(jq -r '.[0].exit_signal // empty' "$archive/9-sessions/summary.json" 2>/dev/null)
+    [ "$s1_signal" = "COMPLETE" ] || die "ASSERT FAIL: session 001 exit_signal expected COMPLETE, got '${s1_signal:-<unset>}'"
+
+    # (b) Activity log exists with exactly one non-empty CSV entry naming
+    # model=sonnet and outcome=DONE.
+    local activity_log="$archive/9-sessions/executor-activity.log"
+    [ -f "$activity_log" ] || die "ASSERT FAIL: 9-sessions/executor-activity.log missing"
+    local activity_lines
+    activity_lines=$(grep -c '[^[:space:]]' "$activity_log" 2>/dev/null) || activity_lines=0
+    [ "$activity_lines" -eq 1 ] || die "ASSERT FAIL: expected 1 entry in executor-activity.log, got $activity_lines"
+    grep -q ',sonnet,DONE,' "$activity_log" \
+        || die "ASSERT FAIL: executor-activity.log entry must include ',sonnet,DONE,' — got: $(cat "$activity_log")"
+
+    # (c) Session transcript records an Agent tool dispatch (proves the
+    # Organiser used the Agent tool, not a direct Write).
+    grep -q '"name":"Agent"' "$archive/9-sessions/001.json" \
+        || die "ASSERT FAIL: session 001 transcript has no Agent tool_use event"
+
+    # (d) Work product on the merged base, with exact content.
+    [ -f "$wt/file-executor.txt" ] || die "ASSERT FAIL: file-executor.txt missing on merged base"
+    local content
+    content=$(cat "$wt/file-executor.txt")
+    [ "$content" = "executor wrote this" ] \
+        || die "ASSERT FAIL: file-executor.txt content expected 'executor wrote this', got '$content'"
+
+    # (e) Governance markers landed (legacy ingestion).
+    grep -q 'Dispatch test complete' "$wt/TODO.md"        || die "ASSERT FAIL: TODO.md missing dispatch marker"
+    grep -q 'Used Agent tool'        "$wt/DECISIONS.md"   || die "ASSERT FAIL: DECISIONS.md missing dispatch decision"
+    grep -q 'via Sonnet Executor'    "$wt/CHANGELOG.md"   || die "ASSERT FAIL: CHANGELOG.md missing dispatch entry"
+
+    # (f) Originals preserved.
+    grep -q '\[fixture-original\] T001' "$wt/TODO.md"      || die "ASSERT FAIL: TODO.md original lost"
+    grep -q '\[fixture-original\] D001' "$wt/DECISIONS.md" || die "ASSERT FAIL: DECISIONS.md original lost"
+    grep -q '\[fixture-original\] C001' "$wt/CHANGELOG.md" || die "ASSERT FAIL: CHANGELOG.md original lost"
+}
+
 cmd_test() {
     local variant="${1:-empty}"
     case "$variant" in
-        empty|with-governance|with-conflict|with-parcel|with-handover) ;;
-        *) die "Unknown smoke-test variant: $variant (use 'empty', 'with-governance', 'with-conflict', 'with-parcel', or 'with-handover')" ;;
+        empty|with-governance|with-conflict|with-parcel|with-handover|with-organiser) ;;
+        *) die "Unknown smoke-test variant: $variant (use 'empty', 'with-governance', 'with-conflict', 'with-parcel', 'with-handover', or 'with-organiser')" ;;
     esac
 
     command -v claude >/dev/null 2>&1 \
@@ -563,6 +619,7 @@ EOF
         with-conflict)    smoke_assert_with_conflict "$tmpdir" ;;
         with-parcel)      smoke_assert_with_parcel "$tmpdir" ;;
         with-handover)    smoke_assert_with_handover "$tmpdir" ;;
+        with-organiser)   smoke_assert_with_organiser "$tmpdir" ;;
     esac
 
     echo ""

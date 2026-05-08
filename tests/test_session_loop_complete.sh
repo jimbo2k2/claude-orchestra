@@ -15,9 +15,13 @@ mkdir -p "$TMP/fake-bin"
 # trailing *newlines* but preserves a trailing whitespace-only line, so this
 # reproduces the bug where the old `tail -n1` returned the blank/whitespace
 # line instead of the real signal line.
-cat > "$TMP/fake-bin/claude" <<'EOF'
+cat > "$TMP/fake-bin/claude" <<EOF
 #!/bin/bash
-cat >/dev/null
+# Capture every prompt this fake-claude is invoked with (working session
+# AND wind-down) so the test can assert the working-session prompt was
+# built from the Organiser template. Append with a boundary marker —
+# overwriting would lose the working-session prompt when wind-down runs.
+{ echo "----PROMPT-BOUNDARY----"; cat; echo; } >> "$TMP/captured-prompt"
 # Phase 6: COMPLETE requires a clean worktree (Cat D check). The orchestrator
 # initialises .orchestra/runs/<ts>/ before invoking claude, so a real agent
 # would commit those state files during their session. Mirror that here.
@@ -88,5 +92,17 @@ code=$(jq -r '.[0].exit_code' "$f")
 [ "$signal" = "COMPLETE" ] || { echo "expected exit_signal=COMPLETE, got '$signal'"; exit 1; }
 [ "$category" = "null" ] || { echo "expected crash_category=null, got '$category'"; exit 1; }
 [ "$code" = "0" ] || { echo "expected exit_code=0, got '$code'"; exit 1; }
+
+# Session prompt was built from the Organiser template — confirm by grepping
+# for a literal phrase unique to lib/organiser-prompt.txt that wouldn't appear
+# in the legacy heredoc.
+[ -s "$TMP/captured-prompt" ] || { echo "expected captured prompt file to exist and be non-empty"; exit 1; }
+grep -q "You are the Organiser" "$TMP/captured-prompt" || { echo "expected Organiser prompt marker in captured prompt; got first 5 lines:"; head -5 "$TMP/captured-prompt"; exit 1; }
+grep -q "Agent tool" "$TMP/captured-prompt" || { echo "expected Agent-tool reference in captured prompt"; exit 1; }
+# Placeholders must be substituted, not left literal.
+! grep -q "__RUN_DIR__\|__SESSION_NUM__\|__ORGANISER_CONTEXT_THRESHOLD__" "$TMP/captured-prompt" || { echo "expected all __PLACEHOLDERS__ to be substituted"; exit 1; }
+
+# Activity log file must be created at run start (touch in cmd_run).
+[ -f "${RUN_DIR}9-sessions/executor-activity.log" ] || { echo "expected 9-sessions/executor-activity.log to exist"; exit 1; }
 
 echo "OK"

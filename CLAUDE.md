@@ -31,7 +31,8 @@ examples/
     ├── with-governance/            pre-populated TODO/DECISIONS/CHANGELOG
     ├── with-conflict/              contradicting decision — exercises conflict surfacing
     ├── with-handover/              multi-session HANDOVER → COMPLETE flow
-    └── with-parcel/                parent uses Governance/pending/ parcel ingestion
+    ├── with-parcel/                parent uses Governance/pending/ parcel ingestion
+    └── with-organiser/             Organiser → Sonnet Executor dispatch via Agent tool
 build-history/
 ├── archive/<version>/              frozen per-version specs, plans, transcripts
 └── <topic>/                        active design work in progress (e.g. organiser-executor/)
@@ -77,7 +78,7 @@ README.md
 
 - **Spec (canonical):** `build-history/archive/v0-cleanup/2026-04-29-orchestra-cleanup-design.md`
 - **Plan:** `build-history/archive/v0-cleanup/2026-04-29-orchestra-cleanup-plan.md`
-- **Smoke fixtures:** `examples/smoke-test/{empty,with-governance,with-conflict,with-handover,with-parcel}/`
+- **Smoke fixtures:** `examples/smoke-test/{empty,with-governance,with-conflict,with-handover,with-parcel,with-organiser}/`
 - **Migration prompt:** `MIGRATION.md` (Claude-readable; for users coming
   from an older orchestra install)
 - **Backlog:** `ROADMAP.md` (non-blocking improvements identified during

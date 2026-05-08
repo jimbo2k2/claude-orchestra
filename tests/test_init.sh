@@ -17,6 +17,9 @@ git init -q
 [ -d .orchestra/runs/archive ] || { echo "missing runs/archive"; exit 1; }
 [ -x .orchestra/runtime/bin/orchestra ] || { echo "orchestra not executable"; exit 1; }
 [ -f .orchestra/runtime/lib/config.sh ] || { echo "config.sh missing"; exit 1; }
+[ -f .orchestra/runtime/lib/winddown-prompt.txt ] || { echo "winddown-prompt.txt missing"; exit 1; }
+[ -f .orchestra/runtime/lib/organiser-prompt.txt ] || { echo "organiser-prompt.txt missing"; exit 1; }
+[ -f .orchestra/runtime/lib/executor-prompt-template.txt ] || { echo "executor-prompt-template.txt missing"; exit 1; }
 [ -f .orchestra/CONFIG.md ] || { echo "CONFIG.md missing"; exit 1; }
 [ -f .orchestra/OBJECTIVE.md ] || { echo "OBJECTIVE.md missing"; exit 1; }
 [ -f .orchestra/CLAUDE.md ] || { echo "CLAUDE.md missing"; exit 1; }

@@ -25,7 +25,16 @@ User-facing changes between releases. For per-version build artifacts
   logging, exit signals).
 - `lib/executor-prompt-template.txt` — briefing skeleton the Organiser
   fills at dispatch time.
+- `bin/orchestrator.sh` now builds the working-session prompt by
+  loading and substituting `lib/organiser-prompt.txt` (replaces the
+  legacy heredoc).
+- `bin/orchestra init` copies the two new prompt files into the
+  project's `.orchestra/runtime/lib/` so they are available at run time.
+- `bin/orchestra run` touches `9-sessions/executor-activity.log` at
+  run start; the Organiser appends one CSV line per Agent dispatch.
+- `examples/smoke-test/with-organiser/` — opt-in smoke fixture that
+  exercises one Sonnet-Executor dispatch end-to-end. Run with
+  `orchestra test with-organiser`.
 
 These changes accompany the organiser-executor work (see
-`build-history/organiser-executor/PLAN.md`). The wiring into
-`bin/orchestrator.sh` lands in a subsequent change.
+`build-history/organiser-executor/PLAN.md`).

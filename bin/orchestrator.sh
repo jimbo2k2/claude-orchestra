@@ -38,8 +38,13 @@ apply_config_defaults
 
 MAX_SESSIONS="${ORCHESTRA_CONFIG[MAX_SESSIONS]}"
 MAX_CRASHES="${ORCHESTRA_CONFIG[MAX_CONSECUTIVE_CRASHES]}"
-MODEL="${ORCHESTRA_CONFIG[MODEL]}"
+# Read ORGANISER_MODEL with a permissive fallback to the legacy MODEL key.
+# cmd_run's validate_config (in bin/orchestra) runs the canonical compat shim
+# and emits the deprecation warning; orchestrator.sh re-parses from disk so
+# we just read whichever key the user wrote.
+MODEL="${ORCHESTRA_CONFIG[ORGANISER_MODEL]:-${ORCHESTRA_CONFIG[MODEL]:-}}"
 EFFORT="${ORCHESTRA_CONFIG[EFFORT]}"
+ORGANISER_CONTEXT_THRESHOLD="${ORCHESTRA_CONFIG[ORGANISER_CONTEXT_THRESHOLD]}"
 COOLDOWN="${ORCHESTRA_CONFIG[COOLDOWN_SECONDS]}"
 CRASH_COOLDOWN="${ORCHESTRA_CONFIG[CRASH_COOLDOWN_SECONDS]}"
 QUOTA_PACING="${ORCHESTRA_CONFIG[QUOTA_PACING]}"
@@ -470,31 +475,16 @@ run_session_with_watchdog() {
 
 build_session_prompt() {
     local n="$1"
-    cat <<EOF
-You are an autonomous Claude Code session in orchestra run $RUN_TS, session $n.
-
-Read the following files in $WORKTREE_DIR/.orchestra/runs/$RUN_TS/ for context:
-- 2-OBJECTIVE.md (the run objective — read first)
-- 1-INBOX.md (any human messages — check on cold-start)
-- 6-HANDOVER.md (briefing from previous session, if any)
-- 3-TODO.md, 4-DECISIONS.md, 5-CHANGELOG.md, 7-SUMMARY.md (rolling state)
-
-Make progress against the objective. Update the rolling files as you work.
-
-When done with this session, exit with EXACTLY one of:
-- COMPLETE — objective met. **Before emitting COMPLETE you MUST commit any
-  work to the run-branch.** Run \`git status\` first; \`git add\` + \`git commit\`
-  any uncommitted or untracked files. Orchestra enforces a clean-worktree
-  invariant at COMPLETE — dirty state will be flagged as Category D and
-  wind-down will then have to commit on your behalf during damage assessment.
-- HANDOVER — more work remains, write 6-HANDOVER.md briefing for the next
-  session. Dirty state is OK on HANDOVER (next session picks up from the
-  worktree).
-- BLOCKED — external dependency missing; write 6-HANDOVER.md with remaining
-  work and dependency analysis. Dirty state is OK on BLOCKED.
-
-The signal is the LAST line of your output, on its own line.
-EOF
+    # The Organiser prompt is the single source of truth for the working-
+    # session contract — same loading shape as the wind-down prompt.
+    # Substitutions match the placeholders in lib/organiser-prompt.txt.
+    cat "$WORKTREE_DIR/.orchestra/runtime/lib/organiser-prompt.txt" \
+        | sed "s|__RUN_DIR__|$RUN_DIR|g" \
+        | sed "s|__RUN_TS__|$RUN_TS|g" \
+        | sed "s|__SESSION_NUM__|$n|g" \
+        | sed "s|__WORKTREE_DIR__|$WORKTREE_DIR|g" \
+        | sed "s|__RUN_BRANCH__|$RUN_BRANCH|g" \
+        | sed "s|__ORGANISER_CONTEXT_THRESHOLD__|$ORGANISER_CONTEXT_THRESHOLD|g"
 }
 
 while [ $session_num -lt $MAX_SESSIONS ] && [ $crash_count -lt $MAX_CRASHES ]; do
