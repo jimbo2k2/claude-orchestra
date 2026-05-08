@@ -1,11 +1,18 @@
 # Organiser / Executor — implementation plan
 
-Status: Phase 0 complete, ready for Phase 1. Authored 2026-05-08 from
-a design conversation following the cost audit of run-20260507-141954
-(~$960 overnight, 11 sequential Opus-high working sessions, no model
-adaptiveness). Code-reviewed 2026-05-08 against current orchestra
-codebase; review findings folded in. Phase 0 verification spike run
-2026-05-08 (`/tmp/orchestra-phase0-spike`); findings folded in.
+Status: Phases 0–4 shipped on `feat/organiser-executor`. Phase 5
+(real overnight run + cost compare against May 7 baseline) is the
+remaining empirical-validation step and runs once the branch is
+merged and a real plan is ready. This document is preserved as
+historical record of the design at authoring time; phase-by-phase
+status as shipped lives in `CHANGES.md` and the commits.
+
+Authored 2026-05-08 from a design conversation following the cost
+audit of run-20260507-141954 (~$960 overnight, 11 sequential
+Opus-high working sessions, no model adaptiveness). Code-reviewed
+2026-05-08 against the current orchestra codebase; review findings
+folded in. Phase 0 verification spike run 2026-05-08
+(`/tmp/orchestra-phase0-spike`); findings folded in.
 
 Vocabulary in this plan follows spec Section 2: **run**, **working
 session**, **wind-down session**. "Outer loop" / "inner loop" are used
@@ -224,7 +231,7 @@ is a flat activity log, which lives under `9-sessions/` per the spec's
 ```
 
 `executor-activity.log` is appended to per dispatch (one CSV-style line:
-timestamp, session-num, task-id, model, outcome, duration_ms). The
+timestamp, session-num, task-id, model, outcome, duration-seconds). The
 wind-down session reads this to produce a per-session Executor summary
 in the run report (Phase 4). Going via this dedicated log is much
 cheaper than parsing every NDJSON event from `NNN.json` just to count

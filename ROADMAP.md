@@ -65,6 +65,18 @@ that commit) had the full per-phase narrative.
   (`config.sh`, `winddown-prompt.txt`, `organiser-prompt.txt`,
   `executor-prompt-template.txt`), `die` with a pointer at
   `MIGRATION-organiser.md` if any are missing.
+- `bin/orchestrator.sh` `commit_session_artifacts` stages
+  `9-sessions/<NNN>.json` and `summary.json` on the orchestra-bot
+  identity but not `9-sessions/executor-activity.log`. Today the
+  Organiser is instructed to commit it before COMPLETE
+  (`organiser-prompt.txt` step 4) and Cat D catches a dirty worktree —
+  so the COMPLETE path is correct. But on HANDOVER the Organiser may
+  leave dirty state, and a Cat A/B/C crash mid-session loses any
+  in-flight activity-log lines from the run-branch (they survive only
+  in the live worktree). Fix shape: extend `commit_session_artifacts`
+  to also stage the activity log on best-effort, OR document
+  crash-loss of in-flight activity-log lines as accepted behaviour and
+  cross-reference here.
 
 ## Diagnostics & UX
 
