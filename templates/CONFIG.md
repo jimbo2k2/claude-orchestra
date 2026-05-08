@@ -17,8 +17,19 @@ Edit values below. Lines outside the `KEY: VALUE` bullets are ignored.
 - `CRASH_COOLDOWN_SECONDS`: 30
 
 ## Model
-- `MODEL`: opus
+- `ORGANISER_MODEL`: opus
 - `EFFORT`: high
+- `ORGANISER_CONTEXT_THRESHOLD`: 75
+
+`ORGANISER_MODEL` controls the model the Organiser runs as in each
+working session. Subagent Executors choose their own model per task.
+`ORGANISER_CONTEXT_THRESHOLD` is the integer percent of the Organiser's
+context window at which it should wind itself down and HANDOVER (range
+50–95).
+
+The legacy key `MODEL` is still accepted as a deprecated alias and will
+be removed in a future release. If you have an older CONFIG.md, rename
+`MODEL` to `ORGANISER_MODEL`.
 
 ## Worktree
 - `WORKTREE_BASE`: /tmp/orchestra-myproject

@@ -66,13 +66,31 @@ apply_config_defaults() {
     : "${ORCHESTRA_CONFIG[COOLDOWN_SECONDS]:=15}"
     : "${ORCHESTRA_CONFIG[CRASH_COOLDOWN_SECONDS]:=30}"
     : "${ORCHESTRA_CONFIG[SMOKE_TEST_TIMEOUT]:=900}"
+    : "${ORCHESTRA_CONFIG[ORGANISER_CONTEXT_THRESHOLD]:=75}"
 }
 
 # Validate ORCHESTRA_CONFIG has required keys and all values pass type/range
 # checks per spec Section 10. Returns non-zero on first failure with a
 # message on stderr.
 validate_config() {
-    local required=(MAX_SESSIONS MAX_CONSECUTIVE_CRASHES MODEL WORKTREE_BASE BASE_BRANCH)
+    # Compat shim for MODEL → ORGANISER_MODEL (Phase 1 deprecation window).
+    # Runs BEFORE the required-key check so legacy configs supplying only
+    # MODEL keep validating. Post-shim, MODEL and ORGANISER_MODEL always
+    # carry the same value so orchestrator.sh's existing reads of MODEL
+    # continue to work until Phase 2 switches it to ORGANISER_MODEL.
+    local _has_model="${ORCHESTRA_CONFIG[MODEL]:-}"
+    local _has_org="${ORCHESTRA_CONFIG[ORGANISER_MODEL]:-}"
+    if [ -n "$_has_model" ] && [ -n "$_has_org" ]; then
+        ORCHESTRA_CONFIG[MODEL]="$_has_org"
+        echo "WARNING: both MODEL and ORGANISER_MODEL set; ORGANISER_MODEL wins. MODEL is deprecated and will be ignored." >&2
+    elif [ -n "$_has_model" ] && [ -z "$_has_org" ]; then
+        ORCHESTRA_CONFIG[ORGANISER_MODEL]="$_has_model"
+        echo "WARNING: MODEL is deprecated; please rename to ORGANISER_MODEL in your CONFIG.md." >&2
+    elif [ -z "$_has_model" ] && [ -n "$_has_org" ]; then
+        ORCHESTRA_CONFIG[MODEL]="$_has_org"
+    fi
+
+    local required=(MAX_SESSIONS MAX_CONSECUTIVE_CRASHES ORGANISER_MODEL WORKTREE_BASE BASE_BRANCH)
     local key
     for key in "${required[@]}"; do
         if [ -z "${ORCHESTRA_CONFIG[$key]:-}" ]; then
@@ -85,13 +103,14 @@ validate_config() {
     _check_int_min   MAX_SESSIONS            1   || return 1
     _check_int_min   MAX_CONSECUTIVE_CRASHES 1   || return 1
     _check_int_min   MAX_HANG_SECONDS        60  || return 1
-    _check_enum      MODEL  opus sonnet haiku    || return 1
+    _check_enum      ORGANISER_MODEL opus sonnet haiku || return 1
     _check_enum      EFFORT low  medium  high    || return 1
     _check_abspath   WORKTREE_BASE                || return 1
     _check_nonempty  BASE_BRANCH                  || return 1
     _check_pattern   TMUX_PREFIX '^[a-z][a-z0-9-]*$' || return 1
     _check_bool      QUOTA_PACING                 || return 1
     _check_int_range QUOTA_THRESHOLD 1 100        || return 1
+    _check_int_range ORGANISER_CONTEXT_THRESHOLD 50 95 || return 1
     _check_int_min   QUOTA_POLL_INTERVAL    30   || return 1
     _check_int_min   COOLDOWN_SECONDS       0    || return 1
     _check_int_min   CRASH_COOLDOWN_SECONDS 0    || return 1
