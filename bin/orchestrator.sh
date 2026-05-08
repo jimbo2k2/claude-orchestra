@@ -2,16 +2,24 @@
 # orchestrator.sh — session loop running inside the run worktree's tmux.
 # Spec: build-history/archive/v0-cleanup/2026-04-29-orchestra-cleanup-design.md Sections 6, 11.
 #
-# 9-sessions/NNN.json schema:
-# {
-#   "session_num": 1,
-#   "started_at": "2026-04-29T15:30:22Z",
-#   "ended_at": "2026-04-29T15:35:10Z",
-#   "exit_code": 0,
-#   "exit_signal": "COMPLETE" | "HANDOVER" | "BLOCKED" | null,
-#   "crash_category": null | "A" | "B" | "C" | "D",
-#   "rate_limit_events": []
-# }
+# 9-sessions/NNN.json — full raw stream-json transcript for session N.
+# This is NDJSON (one JSON event per line), not a single JSON document; the
+# .json extension matches the legacy stub filename for downstream tooling.
+# Always written, on success and on crash alike.
+#
+# 9-sessions/summary.json — single JSON array, one entry per session, schema:
+# [
+#   {
+#     "session_num": 1,
+#     "started_at": "2026-04-29T15:30:22Z",
+#     "ended_at": "2026-04-29T15:35:10Z",
+#     "exit_code": 0,
+#     "exit_signal": "COMPLETE" | "HANDOVER" | "BLOCKED" | null,
+#     "crash_category": null | "A" | "B" | "C" | "D",
+#     "rate_limit_events": []
+#   },
+#   ...
+# ]
 set -euo pipefail
 
 : "${RUN_DIR:?RUN_DIR not set}"
@@ -280,37 +288,51 @@ extract_signal() {
     printf '%s' "$result_text" | awk 'NF{line=$0} END{print line}' | tr -d '[:space:]'
 }
 
-write_session_json() {
+append_session_summary() {
     local n="$1" started="$2" ended="$3" code="$4" signal="$5" cat="$6"
-    local fname
-    fname="$RUN_DIR/9-sessions/$(printf '%03d' "$n").json"
-    jq -n \
+    local fname tmp
+    fname="$RUN_DIR/9-sessions/summary.json"
+    tmp="${fname}.tmp"
+
+    # Atomic update: read existing array (empty array if missing/unreadable),
+    # append the new entry, write to tempfile, mv into place. The mv keeps
+    # readers from ever observing a partial file.
+    local existing
+    if [ -f "$fname" ]; then
+        existing=$(cat "$fname")
+    else
+        existing="[]"
+    fi
+
+    jq \
         --argjson n "$n" \
         --arg s "$started" \
         --arg e "$ended" \
         --argjson c "$code" \
         --arg sig "$signal" \
         --arg cat "$cat" \
-        '{session_num: $n, started_at: $s, ended_at: $e, exit_code: $c,
-          exit_signal: ($sig | select(. != "") // null),
-          crash_category: ($cat | select(. != "") // null),
-          rate_limit_events: []}' \
-        > "$fname"
+        '. + [{session_num: $n, started_at: $s, ended_at: $e, exit_code: $c,
+               exit_signal: ($sig | select(. != "") // null),
+               crash_category: ($cat | select(. != "") // null),
+               rate_limit_events: []}]' \
+        <<<"$existing" > "$tmp"
+    mv "$tmp" "$fname"
 }
 
-# Commit the per-session JSON (written by the orchestrator AFTER the agent's
-# own commit) onto the run-branch so wind-down's merge carries it to base.
-# Without this, sessions that COMPLETE leave their JSON uncommitted in the
-# worktree — the file is then absent from the project tree's checkout of
-# main after wind-down. Failures swallowed: nothing-to-commit and missing
-# git identity both reduce to no-op rather than tanking the run.
-commit_session_json() {
+# Commit the per-session artifacts (raw transcript + updated summary) onto
+# the run-branch so wind-down's merge carries them to base. Without this,
+# sessions that COMPLETE leave the files uncommitted in the worktree — they
+# would be absent from the project tree's checkout of main after wind-down.
+# Failures swallowed: nothing-to-commit and missing git identity both reduce
+# to no-op rather than tanking the run.
+commit_session_artifacts() {
     local n="$1"
-    local relpath=".orchestra/runs/$RUN_TS/9-sessions/$(printf '%03d' "$n").json"
+    local transcript=".orchestra/runs/$RUN_TS/9-sessions/$(printf '%03d' "$n").json"
+    local summary=".orchestra/runs/$RUN_TS/9-sessions/summary.json"
     ( cd "$WORKTREE_DIR" && \
-      git add "$relpath" 2>/dev/null && \
+      git add "$transcript" "$summary" 2>/dev/null && \
       git -c user.email=orchestra@local -c user.name=orchestra \
-          commit -q -m "orchestra: session $n metadata" --no-verify -- "$relpath" 2>/dev/null \
+          commit -q -m "orchestra: session $n metadata" --no-verify -- "$transcript" "$summary" 2>/dev/null \
     ) || true
 }
 
@@ -532,15 +554,12 @@ EOF
     # Raw stream-json file; kept around briefly for signal extraction below.
     out=$(cat "$stdout_log")
 
-    # On crash/hang, preserve stderr (and the raw stream-json for diagnosis)
-    # in the run folder. Spec Section 11 makes wind-down failure handling
-    # depend on stderr; the JSON helps post-mortem of partial sessions.
+    # On crash/hang, preserve stderr — Spec Section 11 makes wind-down failure
+    # handling depend on it. The transcript is archived later (after the
+    # COMPLETE clean-worktree check, so the new file doesn't itself trigger
+    # Cat D on an otherwise-clean session).
     if [ "$code" -ne 0 ]; then
         cp "$stderr_log" "$RUN_DIR/9-sessions/$(printf '%03d' "$session_num")-stderr.txt"
-        # NDJSON, not a single JSON document — the .ndjson extension keeps
-        # globs like `*.json` (used by tests + tooling for the per-session
-        # summaries) from picking these diagnostics up.
-        cp "$stdout_log" "$RUN_DIR/9-sessions/$(printf '%03d' "$session_num")-stream.ndjson"
     fi
 
     # Exit code 125 from the watchdog signals an infrastructure failure
@@ -562,8 +581,6 @@ EOF
     last_line=$(extract_signal "$stdout_log")
     signal=""
     category=""
-
-    rm -f "$stdout_log" "$stderr_log"
 
     if [ $code -ne 0 ]; then
         category="A"
@@ -591,13 +608,22 @@ EOF
         signal=""
     fi
 
-    write_session_json "$session_num" "$started_at" "$ended_at" "$code" "$signal" "$category" \
-        || { echo "ERROR: failed writing session JSON (session $session_num, exit $code)" >&2; exit 2; }
+    # Archive the raw stream-json transcript as 9-sessions/NNN.json so the
+    # full session is interrogable post-hoc (tool calls, prompts, cost
+    # breakdown, partial output on crash). The transcript is NDJSON despite
+    # the .json extension; the name matches the legacy stub filename for
+    # downstream tooling. Copied AFTER the dirty-worktree check above so an
+    # otherwise-clean COMPLETE isn't reclassified as Cat D by its own log.
+    cp "$stdout_log" "$RUN_DIR/9-sessions/$(printf '%03d' "$session_num").json"
+    rm -f "$stdout_log" "$stderr_log"
 
-    # Commit the orchestrator-written JSON onto the run-branch (else wind-down's
-    # merge won't carry it) and publish the branch to origin for audit. Both
-    # are best-effort and never tank the run.
-    commit_session_json "$session_num"
+    append_session_summary "$session_num" "$started_at" "$ended_at" "$code" "$signal" "$category" \
+        || { echo "ERROR: failed writing session summary (session $session_num, exit $code)" >&2; exit 2; }
+
+    # Commit the orchestrator-written artifacts (transcript + summary) onto
+    # the run-branch (else wind-down's merge won't carry them) and publish
+    # the branch to origin for audit. Both are best-effort, never tank the run.
+    commit_session_artifacts "$session_num"
     publish_run_branch
 
     echo "─── Session $session_num ended  exit=$code signal=${signal:--} category=${category:--} ───"

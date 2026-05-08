@@ -63,12 +63,13 @@ grep -q "Session: 1" "${RUN}BLOCKED" || { echo "missing session number"; exit 1;
 # Run NOT archived
 [ ! -d "$WORKTREE/.orchestra/runs/archive/$(basename "$RUN")" ] || { echo "BLOCKED runs must not auto-archive"; exit 1; }
 
-# Only one session was run (BLOCKED halts immediately)
-n=$(ls "${RUN}9-sessions/"*.json 2>/dev/null | wc -l)
+# Only one session was run (BLOCKED halts immediately).
+# Match [0-9]*.json so summary.json doesn't inflate the count.
+n=$(ls "${RUN}9-sessions/"[0-9]*.json 2>/dev/null | wc -l)
 [ "$n" -eq 1 ] || { echo "expected exactly 1 session, got $n"; exit 1; }
 
-# Session JSON should record exit_signal=BLOCKED
-sig=$(jq -r '.exit_signal' "${RUN}9-sessions/001.json")
+# Session summary should record exit_signal=BLOCKED
+sig=$(jq -r '.[0].exit_signal' "${RUN}9-sessions/summary.json")
 [ "$sig" = "BLOCKED" ] || { echo "expected exit_signal=BLOCKED, got '$sig'"; exit 1; }
 
 echo "OK"

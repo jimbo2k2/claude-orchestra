@@ -51,7 +51,7 @@ done
 WORKTREE=$(ls -d "$TMP/wt"/run-* | head -1)
 RUN_DIR=$(ls -d "$WORKTREE"/.orchestra/runs/*/ | head -1)
 
-cat=$(jq -r '.crash_category' "${RUN_DIR}9-sessions/001.json")
+cat=$(jq -r '.[0].crash_category' "${RUN_DIR}9-sessions/summary.json")
 [ "$cat" = "C" ] || { echo "expected C, got $cat"; exit 1; }
 
 echo "OK"

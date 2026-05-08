@@ -41,7 +41,8 @@ Each run creates a numbered file layout under `<worktree>/.orchestra/runs/<run-t
 - `5-CHANGELOG.md` — what changed in this run
 - `6-HANDOVER.md` — briefing for the next session (regenerated each session)
 - `7-SUMMARY.md` — rolling per-session narrative
-- `9-sessions/NNN.json` — machine session logs
+- `9-sessions/NNN.json` — raw stream-json transcript per session (NDJSON, always archived)
+- `9-sessions/summary.json` — single JSON array, one metadata entry per session (timestamps, exit code, signal, crash category)
 
 After successful wind-down the folder moves to `.orchestra/runs/archive/<timestamp>/`.
 

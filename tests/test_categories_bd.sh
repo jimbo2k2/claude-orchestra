@@ -53,10 +53,13 @@ done
 WORKTREE=$(ls -d "$TMP/wt"/run-* | head -1)
 RUN_DIR=$(ls -d "$WORKTREE"/.orchestra/runs/*/ | head -1)
 
-# Should have 2 session JSONs both with crash_category=B
-for f in "${RUN_DIR}9-sessions/"*.json; do
-    cat=$(jq -r '.crash_category' "$f")
-    [ "$cat" = "B" ] || { echo "$f: expected B, got $cat"; exit 1; }
+# Both summary entries should have crash_category=B
+summary="${RUN_DIR}9-sessions/summary.json"
+entries=$(jq 'length' "$summary")
+[ "$entries" -ge 1 ] || { echo "expected at least 1 summary entry"; exit 1; }
+for i in $(seq 0 $((entries - 1))); do
+    cat=$(jq -r ".[$i].crash_category" "$summary")
+    [ "$cat" = "B" ] || { echo "entry $i: expected B, got $cat"; exit 1; }
 done
 
 echo "OK"

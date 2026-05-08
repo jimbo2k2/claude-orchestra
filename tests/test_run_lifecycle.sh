@@ -73,8 +73,9 @@ RUN_DIR=$(ls -d "$WORKTREE"/.orchestra/runs/archive/*/ 2>/dev/null | head -1)
 [ -n "$RUN_DIR" ] || { echo "no archived run dir found"; exit 1; }
 [ -d "${RUN_DIR}9-sessions" ] || { echo "no 9-sessions in run dir"; exit 1; }
 
-# Orchestrator wrote a session JSON for the COMPLETE run
-[ -f "${RUN_DIR}9-sessions/001.json" ] || { echo "session JSON missing"; exit 1; }
+# Orchestrator wrote both the per-session transcript and the summary file.
+[ -f "${RUN_DIR}9-sessions/001.json" ] || { echo "session transcript missing"; exit 1; }
+[ -f "${RUN_DIR}9-sessions/summary.json" ] || { echo "session summary missing"; exit 1; }
 
 # Required files exist (created by cmd_run, not the agent yet)
 for f in 1-INBOX.md 2-OBJECTIVE.md 3-TODO.md 4-DECISIONS.md 5-CHANGELOG.md 6-HANDOVER.md 7-SUMMARY.md; do

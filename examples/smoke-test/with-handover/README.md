@@ -12,7 +12,7 @@ in one session.
 
 `smoke_assert_with_handover()` in `bin/orchestra` verifies:
 
-- `9-sessions/` contains exactly 2 session JSON files.
+- `9-sessions/` contains exactly 2 numbered transcript files (NNN.json) plus the rolling `summary.json`.
 - The archived `6-HANDOVER.md` is non-empty (Session 1 wrote a briefing).
 - Both work products land on the merged base (`file-a.txt` = `alpha`,
   `file-b.txt` = `beta`).

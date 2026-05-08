@@ -59,16 +59,20 @@ done
 WORKTREE=$(ls -d "$TMP/wt"/run-* | head -1)
 RUN_DIR=$(ls -d "$WORKTREE"/.orchestra/runs/*/ | head -1)
 
-# Should have written 2 session JSONs (MAX_CONSECUTIVE_CRASHES=2)
-n=$(ls "${RUN_DIR}9-sessions/"*.json 2>/dev/null | wc -l)
-[ "$n" -eq 2 ] || { echo "expected 2 session JSONs, got $n"; exit 1; }
+# Should have written 2 session transcripts (MAX_CONSECUTIVE_CRASHES=2).
+# Match [0-9]*.json so summary.json doesn't inflate the count.
+n=$(ls "${RUN_DIR}9-sessions/"[0-9]*.json 2>/dev/null | wc -l)
+[ "$n" -eq 2 ] || { echo "expected 2 session transcripts, got $n"; exit 1; }
 
-# Each should have crash_category=A and exit_code != 0
-for f in "${RUN_DIR}9-sessions/"*.json; do
-    cat=$(jq -r '.crash_category' "$f")
-    code=$(jq -r '.exit_code' "$f")
-    [ "$cat" = "A" ] || { echo "$f: expected category A, got $cat"; exit 1; }
-    [ "$code" != "0" ] || { echo "$f: expected non-zero exit"; exit 1; }
+# Both summary entries should have crash_category=A and exit_code != 0
+summary="${RUN_DIR}9-sessions/summary.json"
+entries=$(jq 'length' "$summary")
+[ "$entries" -eq 2 ] || { echo "expected 2 summary entries, got $entries"; exit 1; }
+for i in 0 1; do
+    cat=$(jq -r ".[$i].crash_category" "$summary")
+    code=$(jq -r ".[$i].exit_code" "$summary")
+    [ "$cat" = "A" ] || { echo "entry $i: expected category A, got $cat"; exit 1; }
+    [ "$code" != "0" ] || { echo "entry $i: expected non-zero exit"; exit 1; }
 done
 
 echo "OK"

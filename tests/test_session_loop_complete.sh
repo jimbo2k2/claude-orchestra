@@ -70,14 +70,20 @@ WORKTREE=$(ls -d "$TMP/wt"/run-* | head -1)
 # into <worktree>/.orchestra/runs/archive/<ts>/, so look there.
 RUN_DIR=$(ls -d "$WORKTREE"/.orchestra/runs/archive/*/ | head -1)
 
-# Should have exactly one session JSON (MAX_SESSIONS=1, COMPLETE on first).
-n=$(ls "${RUN_DIR}9-sessions/"*.json 2>/dev/null | wc -l)
-[ "$n" -eq 1 ] || { echo "expected 1 session JSON, got $n"; exit 1; }
+# Should have exactly one session transcript (MAX_SESSIONS=1, COMPLETE on first).
+# Match [0-9]*.json so summary.json doesn't inflate the count.
+n=$(ls "${RUN_DIR}9-sessions/"[0-9]*.json 2>/dev/null | wc -l)
+[ "$n" -eq 1 ] || { echo "expected 1 session transcript, got $n"; exit 1; }
 
-f="${RUN_DIR}9-sessions/001.json"
-signal=$(jq -r '.exit_signal' "$f")
-category=$(jq -r '.crash_category' "$f")
-code=$(jq -r '.exit_code' "$f")
+# Transcript must be the raw stream-json NDJSON (always archived now).
+[ -s "${RUN_DIR}9-sessions/001.json" ] || { echo "expected non-empty transcript at 001.json"; exit 1; }
+grep -q '"type":"result"' "${RUN_DIR}9-sessions/001.json" || { echo "expected result event in transcript"; exit 1; }
+
+# Metadata stub now lives in summary.json as a JSON array (one entry per session).
+f="${RUN_DIR}9-sessions/summary.json"
+signal=$(jq -r '.[0].exit_signal' "$f")
+category=$(jq -r '.[0].crash_category' "$f")
+code=$(jq -r '.[0].exit_code' "$f")
 
 [ "$signal" = "COMPLETE" ] || { echo "expected exit_signal=COMPLETE, got '$signal'"; exit 1; }
 [ "$category" = "null" ] || { echo "expected crash_category=null, got '$category'"; exit 1; }

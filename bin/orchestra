@@ -442,20 +442,18 @@ smoke_assert_with_handover() {
     archive=$(find "$tmpdir/wt" -mindepth 5 -maxdepth 5 -type d -path '*/runs/archive/*' -print -quit 2>/dev/null)
     [ -n "$archive" ] || die "ASSERT FAIL: no archived run found"
 
-    # (a) Exactly 2 session JSON files — Phase 1 (Session 1) + Phase 2 (Session 2).
+    # (a) Exactly 2 session transcripts — Phase 1 (Session 1) + Phase 2 (Session 2).
+    # Match `[0-9]*.json` to count numbered transcripts only, excluding summary.json.
     local session_count
-    session_count=$(find "$archive/9-sessions" -mindepth 1 -maxdepth 1 -name '*.json' 2>/dev/null | wc -l)
+    session_count=$(find "$archive/9-sessions" -mindepth 1 -maxdepth 1 -name '[0-9]*.json' 2>/dev/null | wc -l)
     [ "$session_count" -eq 2 ] || die "ASSERT FAIL: expected 2 sessions (HANDOVER then COMPLETE), got $session_count"
 
-    # (b) Final 6-HANDOVER.md may be empty (post-COMPLETE), so check session 001's
-    # commit history instead — Session 1 must have written a non-empty briefing.
-    # The handover briefing is captured in 9-sessions/001.json — confirm it via the
-    # session summary's mention of HANDOVER, plus the handover file's mid-run state.
-    # Pragmatic check: 9-sessions/001.json's exit signal is HANDOVER, and 002.json's
-    # is COMPLETE.
+    # (b) Final 6-HANDOVER.md may be empty (post-COMPLETE), so check the per-session
+    # exit signals instead — Session 1 must have HANDOVER and Session 2 COMPLETE.
+    # Both live in 9-sessions/summary.json (a JSON array, one entry per session).
     local s1_signal s2_signal
-    s1_signal=$(grep -oE '"exit_signal":[[:space:]]*"[A-Z]+"' "$archive/9-sessions/001.json" 2>/dev/null | grep -oE '"[A-Z]+"$' | tr -d '"')
-    s2_signal=$(grep -oE '"exit_signal":[[:space:]]*"[A-Z]+"' "$archive/9-sessions/002.json" 2>/dev/null | grep -oE '"[A-Z]+"$' | tr -d '"')
+    s1_signal=$(jq -r '.[0].exit_signal // empty' "$archive/9-sessions/summary.json" 2>/dev/null)
+    s2_signal=$(jq -r '.[1].exit_signal // empty' "$archive/9-sessions/summary.json" 2>/dev/null)
     [ "$s1_signal" = "HANDOVER" ] || die "ASSERT FAIL: session 001 exit_signal expected HANDOVER, got '${s1_signal:-<unset>}'"
     [ "$s2_signal" = "COMPLETE" ] || die "ASSERT FAIL: session 002 exit_signal expected COMPLETE, got '${s2_signal:-<unset>}'"
 
