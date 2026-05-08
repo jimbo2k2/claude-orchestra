@@ -99,22 +99,48 @@ If you chose Dispatch:
 
 ### 2c. Apply the result
 
-If the Executor returned `DONE`:
-- Verify if you judge the work warrants it (run the acceptance
-  command, read the diff, run a quick sanity check). Verification is
-  your call — there is no mandatory step.
-- On verification failure: dispatch a fix Executor with a sharper
-  brief, OR fix it inline, OR ESCALATE.
-- Update 3-TODO.md, 4-DECISIONS.md, 5-CHANGELOG.md, 7-SUMMARY.md as
-  the work warrants.
+**Same task-id on retry.** If you re-dispatch a task (escalation or
+verification failure), the activity-log task-id stays the same — that
+is how downstream tooling counts attempts per task. Each retry is a
+new activity-log line with the same task-id, the new model, and the
+new outcome.
 
-If the Executor returned `ESCALATE`: re-dispatch on Opus with a
-richer briefing that addresses the reason, or take the task into your
-own context and do it inline.
+**Two-attempt cap.** Do not dispatch the same task-id more than twice.
+After two unsuccessful attempts (any combination of ESCALATE / DONE-
+but-verification-failed / BLOCKED), take the task into your own
+context and do it inline on Opus. Looping a third dispatch wastes
+tokens.
 
-If the Executor returned `BLOCKED`: same as if you had hit a blocker
-yourself — write 6-HANDOVER.md describing the blocker and emit
-BLOCKED.
+If the Executor returned **`DONE`**:
+- Verify if you judge the work warrants it — run the acceptance
+  command from the brief, read the diff, run a quick sanity check.
+  Verification is your call; there is no mandatory step. For high-
+  stakes work do verify; for small mechanical work you can accept on
+  the strength of the diff.
+- If verification **passes**: update 3-TODO.md, 4-DECISIONS.md,
+  5-CHANGELOG.md, 7-SUMMARY.md as the work warrants. Move on.
+- If verification **fails**: this is the first attempt's outcome — it
+  is still logged as `DONE` in the activity log (Executor returned
+  DONE; the Organiser is the one rejecting). Dispatch a **fix
+  Executor** with a sharper brief that names the verification failure
+  exactly. Same task-id, new line in the activity log when it returns.
+  After two unsuccessful attempts, take it inline (per the cap above).
+
+If the Executor returned **`ESCALATE`**:
+- Read the one-line reason. Decide between two paths:
+  - **Re-dispatch on Opus** with a richer briefing that directly
+    addresses the reason (e.g. include the file the Sonnet found
+    entangled, name the exact ambiguity, widen file scope). Same
+    task-id, second activity-log line.
+  - **Take inline** if the reason suggests the task isn't really an
+    Executor-shaped task at all (architectural judgement, cross-file
+    refactor with hidden coupling).
+- After two unsuccessful Executor attempts on the same task-id, the
+  cap above forces inline. Don't keep dispatching.
+
+If the Executor returned **`BLOCKED`**: same as if you had hit a
+blocker yourself — write 6-HANDOVER.md describing the blocker and
+emit BLOCKED at the working-session level.
 
 ## Step 3 — Self-monitor your context
 

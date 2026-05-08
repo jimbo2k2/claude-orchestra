@@ -537,11 +537,124 @@ smoke_assert_with_organiser() {
     grep -q '\[fixture-original\] C001' "$wt/CHANGELOG.md" || die "ASSERT FAIL: CHANGELOG.md original lost"
 }
 
+smoke_assert_with_escalation() {
+    local tmpdir="$1"
+    local wt archive
+    wt=$(find "$tmpdir/wt" -mindepth 1 -maxdepth 1 -type d -name 'run-*' -print -quit 2>/dev/null)
+    [ -n "$wt" ] || die "ASSERT FAIL: no worktree found"
+
+    archive=$(find "$tmpdir/wt" -mindepth 5 -maxdepth 5 -type d -path '*/runs/archive/*' -print -quit 2>/dev/null)
+    [ -n "$archive" ] || die "ASSERT FAIL: no archived run found"
+
+    local session_count s1_signal
+    session_count=$(find "$archive/9-sessions" -mindepth 1 -maxdepth 1 -name '[0-9]*.json' 2>/dev/null | wc -l)
+    [ "$session_count" -eq 1 ] || die "ASSERT FAIL: expected exactly 1 session transcript, got $session_count"
+    s1_signal=$(jq -r '.[0].exit_signal // empty' "$archive/9-sessions/summary.json" 2>/dev/null)
+    [ "$s1_signal" = "COMPLETE" ] || die "ASSERT FAIL: session 001 exit_signal expected COMPLETE, got '${s1_signal:-<unset>}'"
+
+    # Activity log: exactly 2 entries, both with task-id smoke-T1.
+    # First sonnet,ESCALATE; second opus,DONE.
+    local activity_log="$archive/9-sessions/executor-activity.log"
+    [ -f "$activity_log" ] || die "ASSERT FAIL: activity log missing"
+    local n
+    n=$(grep -c '[^[:space:]]' "$activity_log" 2>/dev/null) || n=0
+    [ "$n" -eq 2 ] || die "ASSERT FAIL: expected 2 activity-log entries, got $n. File contents:\n$(cat "$activity_log")"
+
+    local task_ids
+    task_ids=$(awk -F, 'NF{print $3}' "$activity_log" | sort -u | wc -l)
+    [ "$task_ids" -eq 1 ] || die "ASSERT FAIL: expected both activity-log entries to share one task-id, got $task_ids distinct"
+
+    local line1 line2
+    line1=$(awk 'NF{print; exit}' "$activity_log")
+    line2=$(awk 'NF{print}' "$activity_log" | sed -n '2p')
+    case "$line1" in
+        *,smoke-T1,sonnet,ESCALATE,*) ;;
+        *) die "ASSERT FAIL: first activity-log entry expected ',smoke-T1,sonnet,ESCALATE,'; got: $line1" ;;
+    esac
+    case "$line2" in
+        *,smoke-T1,opus,DONE,*) ;;
+        *) die "ASSERT FAIL: second activity-log entry expected ',smoke-T1,opus,DONE,'; got: $line2" ;;
+    esac
+
+    # Two Agent tool dispatches in the session transcript.
+    local agent_count
+    agent_count=$(grep -c '"name":"Agent"' "$archive/9-sessions/001.json" 2>/dev/null) || agent_count=0
+    [ "$agent_count" -ge 2 ] || die "ASSERT FAIL: expected at least 2 Agent tool_use events in session 001 transcript, got $agent_count"
+
+    # Work product on merged base.
+    [ -f "$wt/escalation-result.txt" ] || die "ASSERT FAIL: escalation-result.txt missing on merged base"
+    local content
+    content=$(cat "$wt/escalation-result.txt")
+    [ "$content" = "opus completed this" ] \
+        || die "ASSERT FAIL: escalation-result.txt content expected 'opus completed this', got '$content'"
+
+    # Governance + originals.
+    grep -q 'Escalation retry test complete' "$wt/TODO.md"          || die "ASSERT FAIL: TODO.md missing escalation marker"
+    grep -q 'reran on Opus'                  "$wt/DECISIONS.md"     || die "ASSERT FAIL: DECISIONS.md missing escalation rationale"
+    grep -q 'Opus after Sonnet ESCALATE'     "$wt/CHANGELOG.md"     || die "ASSERT FAIL: CHANGELOG.md missing escalation entry"
+    grep -q '\[fixture-original\] T001'      "$wt/TODO.md"          || die "ASSERT FAIL: TODO.md original lost"
+    grep -q '\[fixture-original\] D001'      "$wt/DECISIONS.md"     || die "ASSERT FAIL: DECISIONS.md original lost"
+    grep -q '\[fixture-original\] C001'      "$wt/CHANGELOG.md"     || die "ASSERT FAIL: CHANGELOG.md original lost"
+}
+
+smoke_assert_with_verify() {
+    local tmpdir="$1"
+    local wt archive
+    wt=$(find "$tmpdir/wt" -mindepth 1 -maxdepth 1 -type d -name 'run-*' -print -quit 2>/dev/null)
+    [ -n "$wt" ] || die "ASSERT FAIL: no worktree found"
+
+    archive=$(find "$tmpdir/wt" -mindepth 5 -maxdepth 5 -type d -path '*/runs/archive/*' -print -quit 2>/dev/null)
+    [ -n "$archive" ] || die "ASSERT FAIL: no archived run found"
+
+    local session_count s1_signal
+    session_count=$(find "$archive/9-sessions" -mindepth 1 -maxdepth 1 -name '[0-9]*.json' 2>/dev/null | wc -l)
+    [ "$session_count" -eq 1 ] || die "ASSERT FAIL: expected exactly 1 session transcript, got $session_count"
+    s1_signal=$(jq -r '.[0].exit_signal // empty' "$archive/9-sessions/summary.json" 2>/dev/null)
+    [ "$s1_signal" = "COMPLETE" ] || die "ASSERT FAIL: session 001 exit_signal expected COMPLETE, got '${s1_signal:-<unset>}'"
+
+    # Activity log: exactly 2 entries, both sonnet,DONE under one task-id.
+    local activity_log="$archive/9-sessions/executor-activity.log"
+    [ -f "$activity_log" ] || die "ASSERT FAIL: activity log missing"
+    local n
+    n=$(grep -c '[^[:space:]]' "$activity_log" 2>/dev/null) || n=0
+    [ "$n" -eq 2 ] || die "ASSERT FAIL: expected 2 activity-log entries, got $n. File contents:\n$(cat "$activity_log")"
+
+    local task_ids done_count
+    task_ids=$(awk -F, 'NF{print $3}' "$activity_log" | sort -u | wc -l)
+    done_count=$(grep -c ',sonnet,DONE,' "$activity_log") || done_count=0
+    [ "$task_ids" -eq 1 ] || die "ASSERT FAIL: expected both activity-log entries to share one task-id, got $task_ids distinct"
+    [ "$done_count" -eq 2 ] || die "ASSERT FAIL: expected 2 ',sonnet,DONE,' entries, got $done_count"
+
+    # Two Agent tool dispatches in the session transcript.
+    local agent_count
+    agent_count=$(grep -c '"name":"Agent"' "$archive/9-sessions/001.json" 2>/dev/null) || agent_count=0
+    [ "$agent_count" -ge 2 ] || die "ASSERT FAIL: expected at least 2 Agent tool_use events in session 001 transcript, got $agent_count"
+
+    # Final work product (second-dispatch content) on merged base.
+    [ -f "$wt/verify-result.txt" ] || die "ASSERT FAIL: verify-result.txt missing on merged base"
+    local content
+    content=$(cat "$wt/verify-result.txt")
+    [ "$content" = "correct content" ] \
+        || die "ASSERT FAIL: verify-result.txt content expected 'correct content', got '$content'"
+
+    # Verification-rejection note must appear in DECISIONS.md (proves the
+    # Organiser logged the rejection on the parent governance side).
+    grep -q 'verification rejected' "$wt/DECISIONS.md" \
+        || die "ASSERT FAIL: DECISIONS.md missing verification-rejection note"
+
+    # Governance + originals.
+    grep -q 'Verify-reject test complete' "$wt/TODO.md"      || die "ASSERT FAIL: TODO.md missing verify marker"
+    grep -q 'fixed via second'            "$wt/CHANGELOG.md" || die "ASSERT FAIL: CHANGELOG.md missing fix entry"
+    grep -q '\[fixture-original\] T001'   "$wt/TODO.md"      || die "ASSERT FAIL: TODO.md original lost"
+    grep -q '\[fixture-original\] D001'   "$wt/DECISIONS.md" || die "ASSERT FAIL: DECISIONS.md original lost"
+    grep -q '\[fixture-original\] C001'   "$wt/CHANGELOG.md" || die "ASSERT FAIL: CHANGELOG.md original lost"
+}
+
 cmd_test() {
     local variant="${1:-empty}"
     case "$variant" in
-        empty|with-governance|with-conflict|with-parcel|with-handover|with-organiser) ;;
-        *) die "Unknown smoke-test variant: $variant (use 'empty', 'with-governance', 'with-conflict', 'with-parcel', 'with-handover', or 'with-organiser')" ;;
+        empty|with-governance|with-conflict|with-parcel|with-handover|with-organiser|with-escalation|with-verify) ;;
+        *) die "Unknown smoke-test variant: $variant (use 'empty', 'with-governance', 'with-conflict', 'with-parcel', 'with-handover', 'with-organiser', 'with-escalation', or 'with-verify')" ;;
     esac
 
     command -v claude >/dev/null 2>&1 \
@@ -620,6 +733,8 @@ EOF
         with-parcel)      smoke_assert_with_parcel "$tmpdir" ;;
         with-handover)    smoke_assert_with_handover "$tmpdir" ;;
         with-organiser)   smoke_assert_with_organiser "$tmpdir" ;;
+        with-escalation)  smoke_assert_with_escalation "$tmpdir" ;;
+        with-verify)      smoke_assert_with_verify "$tmpdir" ;;
     esac
 
     echo ""

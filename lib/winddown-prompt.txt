@@ -31,6 +31,75 @@ You are running INSIDE the worktree that holds the run-branch checkout.
     Record the discovered mapping in `__RUN_DIR__/7-SUMMARY.md` under
     `## Wind-down → ### Governance mapping`. Proceed to Step 2 (legacy mode).
 
+### Step 1.5 — Executor activity summary
+
+Read `__RUN_DIR__/9-sessions/executor-activity.log`. The file is a flat
+CSV — one line per Agent dispatch issued by an Organiser, in this
+schema:
+
+    <iso8601-timestamp>,<session-num>,<task-id>,<model>,<outcome>,<duration-seconds>
+
+Where `<outcome>` is one of `DONE`, `ESCALATE`, `BLOCKED`. The same
+`<task-id>` may appear on multiple lines if the Organiser retried
+(escalation or verification rejection) — that is intentional.
+
+Append an `### Executor activity` subsection to the `## Wind-down`
+block of `__RUN_DIR__/7-SUMMARY.md`. Compute and include:
+
+- **Per session** (one block per distinct `<session-num>` in the log):
+  - Total dispatches in that session.
+  - Model mix (count by model: sonnet / opus / haiku).
+  - Outcomes (count by outcome: DONE / ESCALATE / BLOCKED).
+  - Total Executor wall-clock (sum of duration column, formatted
+    `Xm Ys` if ≥ 60s, else `Ys`).
+  - Tasks with retries (any task-id appearing more than once), with a
+    one-line trace of attempts: `T9c-3 (sonnet ESCALATE → opus DONE)`.
+
+- **Aggregate** (one block at the end):
+  - Total dispatches across all sessions.
+  - ESCALATE rate as a percentage (ESCALATE-count / total-dispatches,
+    rounded to whole percent).
+  - Overall model mix as percentages.
+
+Format example:
+
+```markdown
+### Executor activity
+
+#### Session 1
+- Dispatches: 5 (4 sonnet, 1 opus)
+- Outcomes: 4 DONE, 1 ESCALATE
+- Total Executor wall-clock: 12m 34s
+- Tasks with retries:
+  - `T9c-3` (sonnet ESCALATE → opus DONE)
+
+#### Session 2
+- Dispatches: 0
+
+#### Aggregate
+- Total dispatches: 5
+- ESCALATE rate: 20%
+- Model mix: 80% sonnet, 20% opus
+```
+
+If the activity log is empty (no Executor dispatches at all in the
+run), write the literal line:
+
+```
+_No Executor dispatches recorded._
+```
+
+If the activity log file is missing entirely (older orchestra version,
+or the run was aborted before the log was created), write:
+
+```
+_Executor activity log unavailable._
+```
+
+Use `awk`, `sort`, and `uniq -c` against the CSV to compute the
+counts; do not eyeball them. Bash arithmetic is sufficient for the
+percentage rounding.
+
 ### Step 2 — Ingest run governance
 
 #### Step 2 (parcel mode)

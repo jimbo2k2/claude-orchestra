@@ -35,6 +35,24 @@ User-facing changes between releases. For per-version build artifacts
 - `examples/smoke-test/with-organiser/` — opt-in smoke fixture that
   exercises one Sonnet-Executor dispatch end-to-end. Run with
   `orchestra test with-organiser`.
+- `examples/smoke-test/with-escalation/` — opt-in smoke fixture that
+  exercises the **Sonnet ESCALATE → re-dispatch on Opus** retry path
+  with consistent task-id across attempts. Run with
+  `orchestra test with-escalation`.
+- `examples/smoke-test/with-verify/` — opt-in smoke fixture that
+  exercises the **verification rejection → fix-Executor** retry path.
+  Both attempts return DONE; the rejection is recorded in DECISIONS.md
+  rather than the activity-log outcome. Run with
+  `orchestra test with-verify`.
+- `lib/organiser-prompt.txt` step 2c sharpened with explicit retry
+  rules: same task-id across attempts, two-attempt cap before
+  Organiser takes the task inline on Opus, distinct treatment for
+  ESCALATE vs DONE-but-verification-failed.
+- `lib/winddown-prompt.txt` step 1.5 added: wind-down session now
+  reads `9-sessions/executor-activity.log` and writes a per-session
+  Executor activity summary (dispatches, model mix, outcomes,
+  wall-clock, tasks-with-retries) plus an aggregate ESCALATE rate
+  into `7-SUMMARY.md`'s `## Wind-down` block.
 
 These changes accompany the organiser-executor work (see
 `build-history/organiser-executor/PLAN.md`).

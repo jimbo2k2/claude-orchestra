@@ -52,7 +52,7 @@ tmux attach -t orchestra-<project>    # live tail
 | `orchestra init [dir]` | Scaffold `.orchestra/` into the target project (default: current directory). |
 | `orchestra run` | Start a run in tmux. Reads `.orchestra/CONFIG.md` + `.orchestra/OBJECTIVE.md`. |
 | `orchestra status` | Summarise the current or most recent run. |
-| `orchestra test [variant]` | Smoke test — throwaway worktree, synthetic task, full lifecycle, asserts and cleans up. Variants: `empty`, `with-governance`, `with-conflict`, `with-handover`, `with-parcel`, `with-organiser`. |
+| `orchestra test [variant]` | Smoke test — throwaway worktree, synthetic task, full lifecycle, asserts and cleans up. Variants: `empty`, `with-governance`, `with-conflict`, `with-handover`, `with-parcel`, `with-organiser`, `with-escalation`, `with-verify`. |
 | `orchestra reset` | Archive current run state, reset for the next run. Governance files untouched. |
 
 ## Configuration
@@ -104,7 +104,9 @@ examples/smoke-test/
 ├── with-conflict/         contradicting decision — exercises conflict surfacing
 ├── with-handover/         multi-session HANDOVER → COMPLETE flow
 ├── with-parcel/           parent uses Governance/pending/ parcel ingestion
-└── with-organiser/        Organiser → Sonnet Executor dispatch via Agent tool
+├── with-organiser/        Organiser → Sonnet Executor dispatch via Agent tool
+├── with-escalation/       Sonnet ESCALATE → re-dispatch on Opus, same task-id
+└── with-verify/           Organiser rejects DONE on verification → fix Executor
 
 build-history/             per-version specs, plans, and Claude transcripts that
                            produced this codebase (frozen historical record)
