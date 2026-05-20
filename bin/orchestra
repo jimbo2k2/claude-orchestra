@@ -101,13 +101,82 @@ cmd_run() {
     apply_config_defaults
     validate_config || die "CONFIG.md validation failed"
 
-    local base_branch="${ORCHESTRA_CONFIG[BASE_BRANCH]}"
-    local worktree_base="${ORCHESTRA_CONFIG[WORKTREE_BASE]}"
     local tmux_prefix="${ORCHESTRA_CONFIG[TMUX_PREFIX]}"
 
-    mkdir -p "$worktree_base"
+    # ============================================================
+    # PREFLIGHT — per spec § 3.4. Run in this order; first failure
+    # exits non-zero with a specific cleanup recipe.
+    # (validate_config above already rejected obsolete BASE_BRANCH /
+    # WORKTREE_BASE keys.)
+    # ============================================================
 
-    # Atomic mkdir gate (spec Section 7) — retry up to 3x with fresh timestamp
+    # Preflight 1: Branch refusal. Hardcoded refusal on main/master,
+    # plus any entry in PROTECTED_BRANCHES.
+    local current_branch
+    current_branch="$(git -C "$project_dir" branch --show-current)"
+    [ -n "$current_branch" ] || die "could not determine current branch (detached HEAD?)"
+
+    local protected_csv="${ORCHESTRA_CONFIG[PROTECTED_BRANCHES]:-main,master}"
+    local -a protected_branches=(main master)
+    local _IFS_save="$IFS"
+    IFS=','
+    # shellcheck disable=SC2206
+    local -a _csv_parts=($protected_csv)
+    IFS="$_IFS_save"
+    local b
+    for b in "${_csv_parts[@]}"; do
+        [ -n "$b" ] && protected_branches+=("$b")
+    done
+
+    for b in "${protected_branches[@]}"; do
+        if [ "$current_branch" = "$b" ]; then
+            die "Refusing to run on protected branch '$current_branch'.
+Orchestra in run-in-place mode commits directly on HEAD. Running on
+'main' or any PROTECTED_BRANCHES entry would commit autonomously to a
+protected branch.
+Switch to a feature branch first:
+  git checkout -b feature/<your-slug>
+Or, if you want a different protected set, edit PROTECTED_BRANCHES in
+.orchestra/CONFIG.md."
+        fi
+    done
+
+    # Preflight 2: WORKTREE_PATH canary — catches inherited CONFIG.md
+    # from a sibling worktree. Compare resolved paths.
+    local declared_wt actual_wt
+    declared_wt="$(realpath "${ORCHESTRA_CONFIG[WORKTREE_PATH]}" 2>/dev/null || echo "")"
+    actual_wt="$(realpath "$project_dir")"
+    [ -n "$declared_wt" ] || die "WORKTREE_PATH in CONFIG.md is empty or does not resolve."
+    if [ "$declared_wt" != "$actual_wt" ]; then
+        die "WORKTREE_PATH canary mismatch.
+  CONFIG.md says: $declared_wt
+  Actual repo:    $actual_wt
+Likely cause: this .orchestra/CONFIG.md was inherited from a sibling
+worktree without updating WORKTREE_PATH.
+Fix: edit .orchestra/CONFIG.md and set WORKTREE_PATH to this worktree's
+absolute path ($actual_wt), then re-run."
+    fi
+
+    # Preflight 3: No prior non-archive run folder. Leftover from a
+    # crashed run, or a concurrent run from another tmux session.
+    local pre_existing
+    pre_existing=$(find "$orch/runs" -mindepth 1 -maxdepth 1 -type d -not -name archive 2>/dev/null || true)
+    if [ -n "$pre_existing" ]; then
+        die "A previous run folder still exists under .orchestra/runs/:
+$pre_existing
+
+Review the folder for unarchived work, then archive it via
+'orchestra reset' (moves to .orchestra/runs/archive/<ts>/) or remove
+it manually before starting a new run."
+    fi
+
+    # ============================================================
+    # End preflight. Allocate run folder + launch.
+    # ============================================================
+
+    # Atomic mkdir gate (spec Section 7) — retry up to 3x with fresh timestamp.
+    # Belt-and-braces against sub-second clock anomalies; the no-prior-run-folder
+    # preflight above already ensures the parent state is clean.
     local run_ts run_dir attempt=0
     local run_folder_root="$orch/runs"
     while [ $attempt -lt 3 ]; do
@@ -121,36 +190,40 @@ cmd_run() {
     done
     [ $attempt -lt 3 ] || die "Could not allocate a unique run timestamp after 3 attempts"
 
-    local worktree_dir="$worktree_base/run-$run_ts"
+    # Run-in-place: worktree IS the project dir; no separate run-branch.
+    local worktree_dir="$project_dir"
     local tmux_name="$tmux_prefix-$run_ts"
-    local run_branch="orchestra/run-$run_ts"
 
     # Setup-cleanup trap — clears the run folder if anything below fails before
     # the session loop is live (spec Section 7). ERR only — EXIT/INT/TERM are
     # reserved for the wind-down lock trap (Section 6.1).
     trap "rm -rf '$run_dir'" ERR
 
-    # Worktree creation
-    git -C "$project_dir" worktree add "$worktree_dir" -b "$run_branch" "$base_branch" \
-        || die "git worktree add failed"
-
     # Preflight: OBJECTIVE.md must exist in the worktree (per spec Section 4)
-    [ -f "$worktree_dir/.orchestra/OBJECTIVE.md" ] \
-        || die "OBJECTIVE.md not found in worktree — commit it to $base_branch and retry."
+    [ -f "$orch/OBJECTIVE.md" ] \
+        || die "OBJECTIVE.md not found in .orchestra/ — commit it to your feature branch and retry."
 
-    # Build the run folder INSIDE the worktree (per spec Section 5)
-    local wt_run_dir="$worktree_dir/.orchestra/runs/$run_ts"
-    mkdir -p "$wt_run_dir/9-sessions"
+    # Build the run folder directly at <project>/.orchestra/runs/<ts>/.
+    # The 3-TODO.md / 4-DECISIONS.md / 5-CHANGELOG.md files are NOT created
+    # in parcel-mode (the working sessions write Governance/pending/<hex>.md
+    # directly per spec § 3.6). Legacy-mode (project lacks Governance/CLAUDE.md
+    # + Governance/pending/) still gets 3/4/5 for the wind-down's compat path.
+    mkdir -p "$run_dir/9-sessions"
     # Activity log for Executor dispatches — the Organiser appends one
     # CSV line per Agent dispatch (timestamp,session,task,model,outcome,duration).
-    : > "$wt_run_dir/9-sessions/executor-activity.log"
-    cp "$worktree_dir/.orchestra/OBJECTIVE.md" "$wt_run_dir/2-OBJECTIVE.md"
-    : > "$wt_run_dir/1-INBOX.md"
-    : > "$wt_run_dir/3-TODO.md"
-    : > "$wt_run_dir/4-DECISIONS.md"
-    : > "$wt_run_dir/5-CHANGELOG.md"
-    : > "$wt_run_dir/6-HANDOVER.md"
-    : > "$wt_run_dir/7-SUMMARY.md"
+    : > "$run_dir/9-sessions/executor-activity.log"
+    cp "$orch/OBJECTIVE.md" "$run_dir/2-OBJECTIVE.md"
+    : > "$run_dir/1-INBOX.md"
+    : > "$run_dir/6-HANDOVER.md"
+    : > "$run_dir/7-SUMMARY.md"
+
+    # Legacy-mode (no Governance/CLAUDE.md + Governance/pending/) keeps 3/4/5
+    # so the wind-down's legacy Step 2 (append to parent files) has source files.
+    if [ ! -d "$project_dir/Governance/pending" ] || [ ! -f "$project_dir/Governance/CLAUDE.md" ]; then
+        : > "$run_dir/3-TODO.md"
+        : > "$run_dir/4-DECISIONS.md"
+        : > "$run_dir/5-CHANGELOG.md"
+    fi
 
     # Tmux conflict check
     if tmux has-session -t "$tmux_name" 2>/dev/null; then
@@ -163,19 +236,17 @@ cmd_run() {
     # Launch
     echo "Starting orchestra run in tmux session '$tmux_name'..."
     echo "  Worktree: $worktree_dir"
-    echo "  Run dir:  $wt_run_dir"
+    echo "  Run dir:  $run_dir"
     echo "  Attach:   tmux attach -t $tmux_name"
 
     # Use tmux -e for env passing and -c for cwd to avoid building a shell
     # command-string with interpolated quotes (no injection vector even if
     # config values contain shell metacharacters).
     tmux new-session -d -s "$tmux_name" -c "$worktree_dir" \
-        -e "RUN_DIR=$wt_run_dir" \
+        -e "RUN_DIR=$run_dir" \
         -e "WORKTREE_DIR=$worktree_dir" \
         -e "PROJECT_DIR=$project_dir" \
         -e "RUN_TS=$run_ts" \
-        -e "RUN_BRANCH=$run_branch" \
-        -e "BASE_BRANCH=$base_branch" \
         bash "$orch/runtime/bin/orchestrator.sh"
 }
 cmd_status() {
