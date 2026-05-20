@@ -313,31 +313,24 @@ smoke_assert_common() {
     local tmpdir="$1"
     local archive
 
-    # `find` over globbed `ls` because under set -euo pipefail an `ls` with
-    # no matching glob exits 2, pipefail propagates, and set -e aborts the
-    # script with a silent exit 2 BEFORE the die message can fire. find
-    # returns 0 with empty output on no matches, so the assertion message
-    # is what surfaces on failure.
-    #
-    # Path layout (depths measured from $tmpdir/wt):
-    #   wt/run-<ts>                              = depth 1
-    #   wt/run-<ts>/.orchestra/runs              = depth 3
-    #   wt/run-<ts>/.orchestra/runs/<ts>         = depth 4   (active)
-    #   wt/run-<ts>/.orchestra/runs/archive      = depth 4
-    #   wt/run-<ts>/.orchestra/runs/archive/<ts> = depth 5   (archived)
-    archive=$(find "$tmpdir"/wt -mindepth 5 -maxdepth 5 -type d -path '*/runs/archive/*' -print -quit 2>/dev/null)
-    [ -n "$archive" ] || die "ASSERT FAIL: no archived run found"
+    # Run-in-place path layout (depths measured from $tmpdir):
+    #   .orchestra/runs                 = depth 2
+    #   .orchestra/runs/<ts>            = depth 3   (active)
+    #   .orchestra/runs/archive         = depth 3
+    #   .orchestra/runs/archive/<ts>    = depth 4   (archived)
+    archive=$(find "$tmpdir"/.orchestra/runs/archive -mindepth 1 -maxdepth 1 -type d -print -quit 2>/dev/null)
+    [ -n "$archive" ] || die "ASSERT FAIL: no archived run found at .orchestra/runs/archive/"
 
-    for f in 1-INBOX.md 2-OBJECTIVE.md 3-TODO.md 4-DECISIONS.md 5-CHANGELOG.md \
-             6-HANDOVER.md 7-SUMMARY.md 9-sessions; do
+    # Common files (parcel-mode skips 3/4/5; the smoke fixtures may be either mode).
+    for f in 1-INBOX.md 2-OBJECTIVE.md 6-HANDOVER.md 7-SUMMARY.md 9-sessions; do
         [ -e "$archive/$f" ] || die "ASSERT FAIL: missing $f in archive"
     done
 
-    # Active run dirs are at depth 4 directly under runs/ but NOT named archive.
+    # Active run dirs would be non-archive subfolders directly under .orchestra/runs/.
     # On a successful wind-down, the run dir was moved to archive/<ts>, so this
     # count must be 0.
     local active_count
-    active_count=$(find "$tmpdir"/wt -mindepth 4 -maxdepth 4 -type d -path '*/.orchestra/runs/*' -not -name archive 2>/dev/null | wc -l)
+    active_count=$(find "$tmpdir"/.orchestra/runs -mindepth 1 -maxdepth 1 -type d -not -name archive 2>/dev/null | wc -l)
     [ "$active_count" -eq 0 ] || die "ASSERT FAIL: active run folder remains (should be archived)"
 }
 
@@ -739,19 +732,12 @@ cmd_test() {
     cp -r "$fixture/." "$tmpdir/"
 
     cd "$tmpdir"
-    git init -q --initial-branch=master
-
-    # Local bare remote so wind-down's `git push origin master` has a target.
-    # The fixture has no real remote; without this, push fails and the run BLOCKs.
-    # Pin --initial-branch=master so the bare HEAD matches BASE_BRANCH (otherwise
-    # the bare repo's symbolic HEAD inherits the user's git default, often "main").
-    local bare="$tmpdir/origin.git"
-    git init -q --bare --initial-branch=master "$bare"
-    git remote add origin "$bare"
+    git init -q
+    # Run-in-place refuses on main/master; start on a feature branch.
+    git checkout -b feature/smoke -q 2>/dev/null || git branch -m feature/smoke 2>/dev/null
 
     git -c user.email=smoke@test -c user.name=smoke add -A
     git -c user.email=smoke@test -c user.name=smoke commit -q -m "smoke-test fixture init"
-    git -c user.email=smoke@test -c user.name=smoke push -q origin master
 
     "$SCRIPT_DIR/orchestra" init . >/dev/null
 
@@ -759,8 +745,7 @@ cmd_test() {
 - \`MAX_SESSIONS\`: 2
 - \`MAX_CONSECUTIVE_CRASHES\`: 1
 - \`ORGANISER_MODEL\`: opus
-- \`WORKTREE_BASE\`: $tmpdir/wt
-- \`BASE_BRANCH\`: master
+- \`WORKTREE_PATH\`: $(realpath "$tmpdir")
 - \`TMUX_PREFIX\`: orch-smoke
 - \`SMOKE_TEST_TIMEOUT\`: 900
 EOF
@@ -769,17 +754,23 @@ EOF
 
     git -c user.email=smoke@test -c user.name=smoke add -A
     git -c user.email=smoke@test -c user.name=smoke commit -q -m "smoke-test config + objective"
-    git -c user.email=smoke@test -c user.name=smoke push -q origin master
 
     .orchestra/runtime/bin/orchestra run
 
-    # Poll for the run worktree to appear, then poll for its tmux session to end.
-    local elapsed=0 timeout=900 worktree="" run_ts=""
+    # Poll for the run folder to appear at <tmpdir>/.orchestra/runs/<ts>/,
+    # then wait for its tmux session to end.
+    local elapsed=0 timeout=900 run_dir="" run_ts=""
     while [ $elapsed -lt $timeout ]; do
-        if [ -z "$worktree" ]; then
-            worktree=$(ls -d "$tmpdir"/wt/run-* 2>/dev/null | head -1 || true)
-            if [ -n "$worktree" ]; then
-                run_ts="${worktree##*/run-}"
+        if [ -z "$run_dir" ]; then
+            run_dir=$(find "$tmpdir/.orchestra/runs" -mindepth 1 -maxdepth 1 -type d -not -name archive 2>/dev/null | head -1 || true)
+            if [ -n "$run_dir" ]; then
+                run_ts="$(basename "$run_dir")"
+            else
+                # Run may already be archived (fast paths).
+                run_dir=$(find "$tmpdir/.orchestra/runs/archive" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1 || true)
+                if [ -n "$run_dir" ]; then
+                    run_ts="$(basename "$run_dir")"
+                fi
             fi
         fi
         if [ -n "$run_ts" ]; then

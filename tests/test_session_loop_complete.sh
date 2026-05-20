@@ -36,7 +36,7 @@ EOF
 chmod +x "$TMP/fake-bin/claude"
 
 cd "$TMP"
-git init -q --initial-branch=master
+git init -q && git checkout -b feature/test-rip -q 2>/dev/null || git branch -m feature/test-rip 2>/dev/null
 git -C . commit --allow-empty -q -m "init"
 "$REPO/bin/orchestra" init . 2>&1
 
@@ -44,8 +44,7 @@ cat > .orchestra/CONFIG.md <<EOF
 - \`MAX_SESSIONS\`: 1
 - \`MAX_CONSECUTIVE_CRASHES\`: 2
 - \`MODEL\`: opus
-- \`WORKTREE_BASE\`: $TMP/wt
-- \`BASE_BRANCH\`: master
+- \`WORKTREE_PATH\`: $(realpath "$TMP")
 - \`TMUX_PREFIX\`: orch-complete-test
 - \`QUOTA_PACING\`: false
 - \`COOLDOWN_SECONDS\`: 0
@@ -59,7 +58,11 @@ PATH="$TMP/fake-bin:$PATH" .orchestra/runtime/bin/orchestra run 2>&1
 
 # Wait for orchestrator session to terminate.
 for _ in $(seq 1 30); do
-    WT=$(ls -d "$TMP/wt"/run-* 2>/dev/null | head -1 || true)
+    WT=$(find "$TMP/.orchestra/runs" -mindepth 1 -maxdepth 1 -type d -not -name archive 2>/dev/null | head -1 || true)
+    if [ -z "$WT" ]; then
+        # Maybe already archived
+        WT=$(find "$TMP/.orchestra/runs/archive" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1 || true)
+    fi
     if [ -z "$WT" ]; then
         sleep 1
         continue
@@ -69,10 +72,9 @@ for _ in $(seq 1 30); do
     sleep 1
 done
 
-WORKTREE=$(ls -d "$TMP/wt"/run-* | head -1)
-# Phase 8: COMPLETE now triggers wind-down + archive. The run dir is moved
+# Run-in-place: COMPLETE triggers wind-down + archive. The run dir is moved
 # into <worktree>/.orchestra/runs/archive/<ts>/, so look there.
-RUN_DIR=$(ls -d "$WORKTREE"/.orchestra/runs/archive/*/ | head -1)
+RUN_DIR="$(find "$TMP/.orchestra/runs/archive" -mindepth 1 -maxdepth 1 -type d | head -1)/"
 
 # Should have exactly one session transcript (MAX_SESSIONS=1, COMPLETE on first).
 # Match [0-9]*.json so summary.json doesn't inflate the count.

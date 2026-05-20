@@ -15,7 +15,7 @@ EOF
 chmod +x "$TMP/fake-bin/claude"
 
 cd "$TMP"
-git init -q --initial-branch=master
+git init -q && git checkout -b feature/test-rip -q 2>/dev/null || git branch -m feature/test-rip 2>/dev/null
 git -C . commit --allow-empty -q -m "init"
 "$REPO/bin/orchestra" init . 2>&1
 
@@ -24,8 +24,7 @@ cat > .orchestra/CONFIG.md <<EOF
 - \`MAX_CONSECUTIVE_CRASHES\`: 1
 - \`MAX_HANG_SECONDS\`: 60
 - \`MODEL\`: opus
-- \`WORKTREE_BASE\`: $TMP/wt
-- \`BASE_BRANCH\`: master
+- \`WORKTREE_PATH\`: $(realpath "$TMP")
 - \`TMUX_PREFIX\`: orch-c
 - \`QUOTA_PACING\`: false
 - \`COOLDOWN_SECONDS\`: 0
