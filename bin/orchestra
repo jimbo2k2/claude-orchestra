@@ -66,7 +66,10 @@ cmd_init() {
     for pair in "CONFIG.md:CONFIG.md" "OBJECTIVE.md:OBJECTIVE.md" "orchestra-CLAUDE.md:CLAUDE.md"; do
         local src="${pair%:*}" dst="${pair#*:}"
         if [ ! -f "$orch/$dst" ]; then
-            cp "$TEMPLATE_DIR/$src" "$orch/$dst"
+            # CONFIG.md needs __WORKTREE_PATH__ substituted with the resolved
+            # target dir. Other templates have no substitutions today; sed pass
+            # is a no-op for them.
+            sed "s|__WORKTREE_PATH__|$target|g" "$TEMPLATE_DIR/$src" > "$orch/$dst"
             echo "  Created .orchestra/$dst"
         else
             echo "  Skipped .orchestra/$dst (already exists)"
@@ -76,9 +79,11 @@ cmd_init() {
     cat <<EOF
 
 Done. Next steps:
-  1. Edit .orchestra/CONFIG.md — set MAX_SESSIONS, ORGANISER_MODEL, WORKTREE_BASE, BASE_BRANCH
+  1. Review .orchestra/CONFIG.md — WORKTREE_PATH is pre-filled to $target.
+     Set MAX_SESSIONS and ORGANISER_MODEL if defaults don't suit.
+     Extend PROTECTED_BRANCHES if your primary branch isn't main/master.
   2. Edit .orchestra/OBJECTIVE.md with the brief for your first run
-  3. Commit .orchestra/CONFIG.md and .orchestra/OBJECTIVE.md to your base branch
+  3. Commit .orchestra/CONFIG.md and .orchestra/OBJECTIVE.md to your feature branch
   4. Run: .orchestra/runtime/bin/orchestra run
 EOF
 }
