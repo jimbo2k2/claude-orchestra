@@ -261,37 +261,30 @@ cmd_status() {
     parse_config_md "$orch/CONFIG.md" || die "CONFIG.md parse failed"
     apply_config_defaults
 
-    local worktree_base="${ORCHESTRA_CONFIG[WORKTREE_BASE]:-}"
     local tmux_prefix="${ORCHESTRA_CONFIG[TMUX_PREFIX]}"
-
-    [ -n "$worktree_base" ] || die "WORKTREE_BASE not set in CONFIG.md"
 
     echo "Active runs:"
 
-    # Iterate gate folders at <project>/.orchestra/runs/<ts>/, skipping archive/.
-    # Use find to avoid pipefail/ls trap when no entries exist.
-    local gate_dirs
-    gate_dirs=$(find "$orch/runs" -mindepth 1 -maxdepth 1 -type d -not -name archive 2>/dev/null | sort)
+    # In run-in-place, the run folder IS at <project>/.orchestra/runs/<ts>/
+    # (no separate worktree-side copy). Iterate those directly.
+    local run_dirs
+    run_dirs=$(find "$orch/runs" -mindepth 1 -maxdepth 1 -type d -not -name archive 2>/dev/null | sort)
 
     local printed_any=0
-    if [ -n "$gate_dirs" ]; then
-        local gate
-        while IFS= read -r gate; do
-            [ -n "$gate" ] || continue
+    if [ -n "$run_dirs" ]; then
+        local run
+        while IFS= read -r run; do
+            [ -n "$run" ] || continue
             local run_ts
-            run_ts="$(basename "$gate")"
-            local wt_run_dir="$worktree_base/run-$run_ts/.orchestra/runs/$run_ts"
+            run_ts="$(basename "$run")"
             local tmux_name="$tmux_prefix-$run_ts"
             local state
 
             # Marker presence is authoritative — checked BEFORE tmux liveness.
-            if [ -f "$wt_run_dir/BLOCKED" ]; then
+            if [ -f "$run/BLOCKED" ]; then
                 state="BLOCKED"
-            elif [ -f "$wt_run_dir/WIND-DOWN-FAILED" ]; then
+            elif [ -f "$run/WIND-DOWN-FAILED" ]; then
                 state="WIND-DOWN-FAILED"
-            elif [ ! -d "$wt_run_dir" ]; then
-                # Run dir was moved into archive — treat as archived.
-                state="archived"
             elif tmux has-session -t "$tmux_name" 2>/dev/null; then
                 state="active (tmux: $tmux_name)"
             else
@@ -300,17 +293,17 @@ cmd_status() {
 
             echo "  $run_ts: $state"
             printed_any=1
-        done <<< "$gate_dirs"
+        done <<< "$run_dirs"
     fi
 
     if [ "$printed_any" -eq 0 ]; then
         echo "  (no active runs)"
     fi
 
-    # Count archived runs across all worktrees.
+    # Count archived runs.
     local archived_count=0
-    if [ -d "$worktree_base" ]; then
-        archived_count=$(find "$worktree_base" -mindepth 5 -maxdepth 5 -type d -path '*/runs/archive/*' 2>/dev/null | wc -l)
+    if [ -d "$orch/runs/archive" ]; then
+        archived_count=$(find "$orch/runs/archive" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
     fi
     echo ""
     echo "Archived runs: $archived_count"
@@ -829,52 +822,31 @@ cmd_reset() {
     parse_config_md "$orch/CONFIG.md" || die "CONFIG.md parse failed"
     apply_config_defaults
 
-    local worktree_base="${ORCHESTRA_CONFIG[WORKTREE_BASE]:-}"
-    [ -n "$worktree_base" ] || die "WORKTREE_BASE not set in CONFIG.md"
-
     local archived=0
 
-    # For each worktree, archive any non-archive run dirs.
-    if [ -d "$worktree_base" ]; then
-        local worktrees
-        worktrees=$(find "$worktree_base" -mindepth 1 -maxdepth 1 -type d -name 'run-*' 2>/dev/null)
-        local wt
-        while IFS= read -r wt; do
-            [ -n "$wt" ] || continue
-            local runs_dir="$wt/.orchestra/runs"
-            [ -d "$runs_dir" ] || continue
-
-            # Active run dirs at <wt>/.orchestra/runs/<ts>/ (siblings of archive/).
-            local active_runs
-            active_runs=$(find "$runs_dir" -mindepth 1 -maxdepth 1 -type d -not -name archive 2>/dev/null)
-            local run
-            while IFS= read -r run; do
-                [ -n "$run" ] || continue
-                local run_ts
-                run_ts="$(basename "$run")"
-                mkdir -p "$runs_dir/archive"
-                mv "$run" "$runs_dir/archive/$run_ts"
-                archived=$((archived + 1))
-            done <<< "$active_runs"
-
-        done <<< "$worktrees"
+    # In run-in-place, run folders live at <project>/.orchestra/runs/<ts>/.
+    # Archive any non-archive subfolder.
+    local runs_dir="$orch/runs"
+    if [ -d "$runs_dir" ]; then
+        local active_runs
+        active_runs=$(find "$runs_dir" -mindepth 1 -maxdepth 1 -type d -not -name archive 2>/dev/null)
+        local run
+        while IFS= read -r run; do
+            [ -n "$run" ] || continue
+            local run_ts
+            run_ts="$(basename "$run")"
+            mkdir -p "$runs_dir/archive"
+            mv "$run" "$runs_dir/archive/$run_ts"
+            archived=$((archived + 1))
+        done <<< "$active_runs"
     fi
 
-    # Wind-down lock lives in the project tree (spec Section 7) — singular,
-    # serialises across worktrees. Remove if stale; orchestrator's own
-    # liveness/start-time check catches a still-running holder anyway.
+    # Wind-down lock lives at <project>/.orchestra/runs/.wind-down.lock.
+    # Remove if stale; orchestrator's own liveness/start-time check catches
+    # a still-running holder anyway.
     if [ -f "$orch/runs/.wind-down.lock" ]; then
         rm -f "$orch/runs/.wind-down.lock"
     fi
-
-    # Clean up project-tree gate folders (only if empty — they're just gate dirs).
-    local gate_dirs
-    gate_dirs=$(find "$orch/runs" -mindepth 1 -maxdepth 1 -type d -not -name archive 2>/dev/null)
-    local gate
-    while IFS= read -r gate; do
-        [ -n "$gate" ] || continue
-        rmdir "$gate" 2>/dev/null || true
-    done <<< "$gate_dirs"
 
     echo "Reset: $archived run folder(s) archived."
 }
