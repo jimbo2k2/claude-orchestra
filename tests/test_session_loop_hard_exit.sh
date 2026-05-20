@@ -20,7 +20,7 @@ EOF
 chmod +x "$TMP/fake-bin/claude"
 
 cd "$TMP"
-git init -q --initial-branch=master
+git init -q && git checkout -b feature/test-rip -q 2>/dev/null || git branch -m feature/test-rip 2>/dev/null
 git -C . commit --allow-empty -q -m "init"
 "$REPO/bin/orchestra" init . 2>&1
 
@@ -28,8 +28,7 @@ cat > .orchestra/CONFIG.md <<EOF
 - \`MAX_SESSIONS\`: 5
 - \`MAX_CONSECUTIVE_CRASHES\`: 2
 - \`MODEL\`: opus
-- \`WORKTREE_BASE\`: $TMP/wt
-- \`BASE_BRANCH\`: master
+- \`WORKTREE_PATH\`: $(realpath "$TMP")
 - \`TMUX_PREFIX\`: orch-test
 - \`QUOTA_PACING\`: false
 - \`COOLDOWN_SECONDS\`: 0
@@ -46,18 +45,18 @@ PATH="$TMP/fake-bin:$PATH" .orchestra/runtime/bin/orchestra run 2>&1
 # the worktree path (the project's .orchestra/runs/ contains an "archive"
 # entry from init, so picking the newest entry there is unreliable).
 for _ in $(seq 1 30); do
-    WT=$(ls -d "$TMP/wt"/run-* 2>/dev/null | head -1 || true)
+    WT=$(find "$TMP/.orchestra/runs" -mindepth 1 -maxdepth 1 -type d -not -name archive 2>/dev/null | head -1 || true)
     if [ -z "$WT" ]; then
         sleep 1
         continue
     fi
-    RUN_TS="${WT##*/run-}"
+    RUN_TS="$(basename "$WT")"
     tmux has-session -t "orch-test-$RUN_TS" 2>/dev/null || break
     sleep 1
 done
 
-WORKTREE=$(ls -d "$TMP/wt"/run-* | head -1)
-RUN_DIR=$(ls -d "$WORKTREE"/.orchestra/runs/*/ | head -1)
+WORKTREE=$(find "$TMP/.orchestra/runs" -mindepth 1 -maxdepth 1 -type d -not -name archive | head -1)
+RUN_DIR="$WORKTREE/"
 
 # Should have written 2 session transcripts (MAX_CONSECUTIVE_CRASHES=2).
 # Match [0-9]*.json so summary.json doesn't inflate the count.

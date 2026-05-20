@@ -26,8 +26,6 @@ set -euo pipefail
 : "${WORKTREE_DIR:?WORKTREE_DIR not set}"
 : "${PROJECT_DIR:?PROJECT_DIR not set}"
 : "${RUN_TS:?RUN_TS not set}"
-: "${RUN_BRANCH:?RUN_BRANCH not set}"
-: "${BASE_BRANCH:?BASE_BRANCH not set}"
 
 # Load config from the worktree's CONFIG.md
 declare -gA ORCHESTRA_CONFIG
@@ -52,10 +50,8 @@ QUOTA_THRESHOLD="${ORCHESTRA_CONFIG[QUOTA_THRESHOLD]}"
 QUOTA_POLL_INTERVAL="${ORCHESTRA_CONFIG[QUOTA_POLL_INTERVAL]}"
 CREDENTIALS_FILE="${HOME}/.claude/.credentials.json"
 
-# Spec Section 7: the wind-down lock lives in the PROJECT TREE, not per-
-# worktree, so concurrent runs (each in their own worktree) actually
-# serialise their pushes to origin/<BASE_BRANCH>. Per-worktree placement
-# would defeat the lock's purpose.
+# Spec Section 7: the wind-down lock lives in <project>/.orchestra/runs/
+# (= the project root in run-in-place, since orchestra runs in place).
 WINDDOWN_LOCK="$PROJECT_DIR/.orchestra/runs/.wind-down.lock"
 
 # ─── Kickoff banner ─────────────────────────────────────────────────────────
@@ -67,9 +63,9 @@ cat <<EOF
   orchestra run $RUN_TS
 ═══════════════════════════════════════════════════════════════
   Project       : $PROJECT_DIR
-  Worktree      : $WORKTREE_DIR
+  Worktree      : $WORKTREE_DIR  (run-in-place)
   Run dir       : $RUN_DIR
-  Run branch    : $RUN_BRANCH (base: $BASE_BRANCH)
+  Current branch: $(cd "$WORKTREE_DIR" && git branch --show-current 2>/dev/null || echo unknown)
   Model/effort  : $MODEL / $EFFORT
   Limits        : max-sessions=$MAX_SESSIONS  max-consecutive-crashes=$MAX_CRASHES
   Wind-down lock: $WINDDOWN_LOCK
@@ -148,33 +144,15 @@ print_winddown_recovery() {
 WIND-DOWN FAILED ($category). Run preserved at:
   $RUN_DIR
 
-Run branch: $RUN_BRANCH
-
-EOF
-    case "$category" in
-        A|B|C)
-            cat <<EOF >&2
-Recovery (the merge step did not complete):
+Recovery (manual):
   cd $WORKTREE_DIR
-  git checkout $BASE_BRANCH
-  git merge --ff-only $RUN_BRANCH
-  git push origin $BASE_BRANCH
+  Review $RUN_DIR/6-HANDOVER.md for the wind-down agent's
+  diagnosis. Apply the recovery steps it describes. When the
+  worktree is in a clean state, the run folder can be archived
+  manually via 'orchestra reset' (moves to .orchestra/runs/archive/)
+  or moved into .orchestra/runs/archive/$RUN_TS/.
 
 EOF
-            ;;
-        BLOCKED)
-            cat <<EOF >&2
-Recovery (resolve merge/push manually):
-  cd $WORKTREE_DIR
-  cat $RUN_DIR/6-HANDOVER.md
-  # Resolve conflicts following the manual-resolution instructions in HANDOVER, then:
-  git add .
-  git commit
-  git push origin $BASE_BRANCH
-
-EOF
-            ;;
-    esac
 }
 
 # ─── Quota pacing ────────────────────────────────────────────────────────────
@@ -324,12 +302,14 @@ append_session_summary() {
     mv "$tmp" "$fname"
 }
 
-# Commit the per-session artifacts (raw transcript + updated summary) onto
-# the run-branch so wind-down's merge carries them to base. Without this,
-# sessions that COMPLETE leave the files uncommitted in the worktree — they
-# would be absent from the project tree's checkout of main after wind-down.
+# Commit the per-session artifacts (raw transcript + updated summary) on the
+# current branch (the operator's feature branch in run-in-place). Without this,
+# sessions that COMPLETE leave the files uncommitted in the worktree.
 # Failures swallowed: nothing-to-commit and missing git identity both reduce
 # to no-op rather than tanking the run.
+#
+# In run-in-place there's no separate run-branch to push to — the operator
+# handles the feature → main rollup manually after wind-down.
 commit_session_artifacts() {
     local n="$1"
     local transcript=".orchestra/runs/$RUN_TS/9-sessions/$(printf '%03d' "$n").json"
@@ -338,21 +318,6 @@ commit_session_artifacts() {
       git add "$transcript" "$summary" 2>/dev/null && \
       git -c user.email=orchestra@local -c user.name=orchestra \
           commit -q -m "orchestra: session $n metadata" --no-verify -- "$transcript" "$summary" 2>/dev/null \
-    ) || true
-}
-
-# Publish the run-branch to origin. Called after every per-session bookkeeping
-# commit AND after wind-down — any outcome (HANDOVER, COMPLETE, BLOCKED, all
-# crash categories, wind-down failure). Gives a deep audit trail on origin
-# even if the worktree is later destroyed. Silently no-ops if there is no
-# `origin` remote configured (covers fresh local-only projects + tests).
-# Push failures otherwise warn but do not fail the run.
-publish_run_branch() {
-    ( cd "$WORKTREE_DIR" || exit 0
-      git remote get-url origin >/dev/null 2>&1 || exit 0
-      if ! git push -q --set-upstream origin "$RUN_BRANCH" 2>/dev/null; then
-          echo "warn: failed to push $RUN_BRANCH to origin (continuing)" >&2
-      fi
     ) || true
 }
 
@@ -478,13 +443,26 @@ build_session_prompt() {
     # The Organiser prompt is the single source of truth for the working-
     # session contract — same loading shape as the wind-down prompt.
     # Substitutions match the placeholders in lib/organiser-prompt.txt.
-    cat "$WORKTREE_DIR/.orchestra/runtime/lib/organiser-prompt.txt" \
-        | sed "s|__RUN_DIR__|$RUN_DIR|g" \
-        | sed "s|__RUN_TS__|$RUN_TS|g" \
-        | sed "s|__SESSION_NUM__|$n|g" \
-        | sed "s|__WORKTREE_DIR__|$WORKTREE_DIR|g" \
-        | sed "s|__RUN_BRANCH__|$RUN_BRANCH|g" \
-        | sed "s|__ORGANISER_CONTEXT_THRESHOLD__|$ORGANISER_CONTEXT_THRESHOLD|g"
+    # PROTOCOL_FOLDER: when set, substitute path; when empty/unset,
+    # delete the templated sentence line entirely (spec § 3.8).
+    local protocol_folder="${ORCHESTRA_CONFIG[PROTOCOL_FOLDER]:-}"
+    if [ -n "$protocol_folder" ]; then
+        cat "$WORKTREE_DIR/.orchestra/runtime/lib/organiser-prompt.txt" \
+            | sed "s|__RUN_DIR__|$RUN_DIR|g" \
+            | sed "s|__RUN_TS__|$RUN_TS|g" \
+            | sed "s|__SESSION_NUM__|$n|g" \
+            | sed "s|__WORKTREE_DIR__|$WORKTREE_DIR|g" \
+            | sed "s|__ORGANISER_CONTEXT_THRESHOLD__|$ORGANISER_CONTEXT_THRESHOLD|g" \
+            | sed "s|__PROTOCOL_FOLDER__|$protocol_folder|g"
+    else
+        cat "$WORKTREE_DIR/.orchestra/runtime/lib/organiser-prompt.txt" \
+            | sed "s|__RUN_DIR__|$RUN_DIR|g" \
+            | sed "s|__RUN_TS__|$RUN_TS|g" \
+            | sed "s|__SESSION_NUM__|$n|g" \
+            | sed "s|__WORKTREE_DIR__|$WORKTREE_DIR|g" \
+            | sed "s|__ORGANISER_CONTEXT_THRESHOLD__|$ORGANISER_CONTEXT_THRESHOLD|g" \
+            | sed '/__PROTOCOL_FOLDER__/d'
+    fi
 }
 
 while [ $session_num -lt $MAX_SESSIONS ] && [ $crash_count -lt $MAX_CRASHES ]; do
@@ -614,7 +592,6 @@ EOF
     # the run-branch (else wind-down's merge won't carry them) and publish
     # the branch to origin for audit. Both are best-effort, never tank the run.
     commit_session_artifacts "$session_num"
-    publish_run_branch
 
     echo "─── Session $session_num ended  exit=$code signal=${signal:--} category=${category:--} ───"
 
@@ -655,22 +632,31 @@ EOF
                 # in cmd_run before exec'ing the orchestrator, so no overlap.
                 trap 'rm -f "$WINDDOWN_LOCK"' EXIT INT TERM
 
-                # Build wind-down prompt from template
-                wd_prompt=$(cat "$WORKTREE_DIR/.orchestra/runtime/lib/winddown-prompt.txt" \
-                    | sed "s|__RUN_DIR__|$RUN_DIR|g" \
-                    | sed "s|__BASE_BRANCH__|$BASE_BRANCH|g" \
-                    | sed "s|__RUN_BRANCH__|$RUN_BRANCH|g")
+                # Build wind-down prompt from template.
+                # PROTOCOL_FOLDER: when set, substitute path; when empty/unset,
+                # delete the templated sentence line entirely (spec § 3.8).
+                wd_protocol_folder="${ORCHESTRA_CONFIG[PROTOCOL_FOLDER]:-}"
+                if [ -n "$wd_protocol_folder" ]; then
+                    wd_prompt=$(cat "$WORKTREE_DIR/.orchestra/runtime/lib/winddown-prompt.txt" \
+                        | sed "s|__RUN_DIR__|$RUN_DIR|g" \
+                        | sed "s|__PROTOCOL_FOLDER__|$wd_protocol_folder|g")
+                else
+                    wd_prompt=$(cat "$WORKTREE_DIR/.orchestra/runtime/lib/winddown-prompt.txt" \
+                        | sed "s|__RUN_DIR__|$RUN_DIR|g" \
+                        | sed '/__PROTOCOL_FOLDER__/d')
+                fi
 
                 # Spec Section 11.D: prepend damage-assessment preamble when
                 # the previous working session was Cat D (clean intent + dirty
                 # worktree). Wind-down's first job is to commit deliberately
-                # on the run-branch before the normal merge sequence runs.
+                # on the current branch (the operator's feature branch) before
+                # the normal wind-down sequence runs.
                 if [ "$winddown_damage_assessment" -eq 1 ]; then
                     wd_prompt=$(cat <<DA_EOF
 DAMAGE ASSESSMENT — the previous working session emitted COMPLETE but left
 uncommitted or untracked changes in the worktree. **Before** the wind-down
 sequence below: run \`git status\`, assess each modification, and commit any
-keepers on the run-branch ($RUN_BRANCH) with sensible messages. After the
+keepers on the current branch with sensible messages. After the
 worktree is clean, proceed with the normal wind-down sequence.
 
 ---
@@ -707,7 +693,6 @@ DA_EOF
                     cp "$wd_stderr_log" "$RUN_DIR/wind-down-stderr.txt" 2>/dev/null || true
                     rm -f "$wd_stdout_log" "$wd_stderr_log"
                     echo "Wind-down infrastructure failure (inotifywait) — cannot diagnose further" >&2
-                    publish_run_branch
                     exit 3
                 fi
 
@@ -737,7 +722,6 @@ DA_EOF
                     [ $wd_code -eq 0 ] && failure_cat="B"
                     write_winddown_failed_marker "$failure_cat" "$wd_out" ""
                     print_winddown_recovery "$failure_cat"
-                    publish_run_branch
                     exit 1
                 fi
 
@@ -746,7 +730,6 @@ DA_EOF
                     # push failure. Marker includes 6-HANDOVER.md content.
                     write_winddown_failed_marker "BLOCKED" "$wd_out" "$RUN_DIR/6-HANDOVER.md"
                     print_winddown_recovery "BLOCKED"
-                    publish_run_branch
                     exit 1
                 fi
 
@@ -755,7 +738,6 @@ DA_EOF
                 mkdir -p "$archive_dir"
                 mv "$RUN_DIR" "$archive_dir/$RUN_TS"
                 echo "Run archived at $archive_dir/$RUN_TS"
-                publish_run_branch
                 exit 0
                 ;;
             HANDOVER) sleep "$COOLDOWN"; continue ;;
@@ -782,7 +764,6 @@ The agent could not proceed without an external dependency. See:
 
 After resolving the blocker, prepare a fresh OBJECTIVE.md and run again.
 EOF
-                publish_run_branch
                 exit 0
                 ;;
     esac
@@ -790,10 +771,8 @@ done
 
 if [ $crash_count -ge $MAX_CRASHES ]; then
     echo "Bailing: MAX_CONSECUTIVE_CRASHES reached"
-    publish_run_branch
     exit 1
 fi
 
 echo "MAX_SESSIONS reached without COMPLETE"
-publish_run_branch
 exit 0

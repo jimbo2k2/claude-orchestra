@@ -21,7 +21,7 @@ EOF
 chmod +x "$TMP/fake-bin/claude"
 
 cd "$TMP"
-git init -q --initial-branch=master
+git init -q && git checkout -b feature/test-rip -q 2>/dev/null || git branch -m feature/test-rip 2>/dev/null
 git -c user.email=t@t -c user.name=t commit --allow-empty -q -m "init"
 "$REPO/bin/orchestra" init . 2>&1
 
@@ -29,8 +29,7 @@ cat > .orchestra/CONFIG.md <<EOF
 - \`MAX_SESSIONS\`: 5
 - \`MAX_CONSECUTIVE_CRASHES\`: 2
 - \`MODEL\`: opus
-- \`WORKTREE_BASE\`: $TMP/wt
-- \`BASE_BRANCH\`: master
+- \`WORKTREE_PATH\`: $(realpath "$TMP")
 - \`TMUX_PREFIX\`: orch-bl
 - \`QUOTA_PACING\`: false
 - \`COOLDOWN_SECONDS\`: 0
@@ -44,32 +43,31 @@ PATH="$TMP/fake-bin:$PATH" .orchestra/runtime/bin/orchestra run 2>&1
 
 WORKTREE=""
 for _ in $(seq 1 60); do
-    WORKTREE=$(ls -d "$TMP/wt"/run-* 2>/dev/null | head -1 || true)
+    WORKTREE=$(find "$TMP/.orchestra/runs" -mindepth 1 -maxdepth 1 -type d -not -name archive 2>/dev/null | head -1 || true)
     if [ -n "$WORKTREE" ]; then
-        RUN_TS="${WORKTREE##*/run-}"
+        RUN_TS="$(basename "$WORKTREE")"
         tmux has-session -t "orch-bl-$RUN_TS" 2>/dev/null || break
     fi
     sleep 1
 done
 
-WORKTREE=$(ls -d "$TMP/wt"/run-* | head -1)
-RUN=$(ls -d "$WORKTREE"/.orchestra/runs/2*/ | head -1)
+WORKTREE=$(find "$TMP/.orchestra/runs" -mindepth 1 -maxdepth 1 -type d -not -name archive | head -1)
 
-[ -f "${RUN}BLOCKED" ] || { echo "no BLOCKED marker"; exit 1; }
-grep -q "Cannot proceed" "${RUN}BLOCKED" || { echo "missing handover content in BLOCKED"; exit 1; }
-grep -q "Blocked at:" "${RUN}BLOCKED" || { echo "missing timestamp"; exit 1; }
-grep -q "Session: 1" "${RUN}BLOCKED" || { echo "missing session number"; exit 1; }
+[ -f "$WORKTREE/BLOCKED" ] || { echo "no BLOCKED marker"; exit 1; }
+grep -q "Cannot proceed" "$WORKTREE/BLOCKED" || { echo "missing handover content in BLOCKED"; exit 1; }
+grep -q "Blocked at:" "$WORKTREE/BLOCKED" || { echo "missing timestamp"; exit 1; }
+grep -q "Session: 1" "$WORKTREE/BLOCKED" || { echo "missing session number"; exit 1; }
 
 # Run NOT archived
-[ ! -d "$WORKTREE/.orchestra/runs/archive/$(basename "$RUN")" ] || { echo "BLOCKED runs must not auto-archive"; exit 1; }
+[ ! -d "$TMP/.orchestra/runs/archive/$(basename "$WORKTREE")" ] || { echo "BLOCKED runs must not auto-archive"; exit 1; }
 
 # Only one session was run (BLOCKED halts immediately).
 # Match [0-9]*.json so summary.json doesn't inflate the count.
-n=$(ls "${RUN}9-sessions/"[0-9]*.json 2>/dev/null | wc -l)
+n=$(ls "$WORKTREE/9-sessions/"[0-9]*.json 2>/dev/null | wc -l)
 [ "$n" -eq 1 ] || { echo "expected exactly 1 session, got $n"; exit 1; }
 
 # Session summary should record exit_signal=BLOCKED
-sig=$(jq -r '.[0].exit_signal' "${RUN}9-sessions/summary.json")
+sig=$(jq -r '.[0].exit_signal' "$WORKTREE/9-sessions/summary.json")
 [ "$sig" = "BLOCKED" ] || { echo "expected exit_signal=BLOCKED, got '$sig'"; exit 1; }
 
 echo "OK"

@@ -66,7 +66,10 @@ cmd_init() {
     for pair in "CONFIG.md:CONFIG.md" "OBJECTIVE.md:OBJECTIVE.md" "orchestra-CLAUDE.md:CLAUDE.md"; do
         local src="${pair%:*}" dst="${pair#*:}"
         if [ ! -f "$orch/$dst" ]; then
-            cp "$TEMPLATE_DIR/$src" "$orch/$dst"
+            # CONFIG.md needs __WORKTREE_PATH__ substituted with the resolved
+            # target dir. Other templates have no substitutions today; sed pass
+            # is a no-op for them.
+            sed "s|__WORKTREE_PATH__|$target|g" "$TEMPLATE_DIR/$src" > "$orch/$dst"
             echo "  Created .orchestra/$dst"
         else
             echo "  Skipped .orchestra/$dst (already exists)"
@@ -76,9 +79,11 @@ cmd_init() {
     cat <<EOF
 
 Done. Next steps:
-  1. Edit .orchestra/CONFIG.md — set MAX_SESSIONS, ORGANISER_MODEL, WORKTREE_BASE, BASE_BRANCH
+  1. Review .orchestra/CONFIG.md — WORKTREE_PATH is pre-filled to $target.
+     Set MAX_SESSIONS and ORGANISER_MODEL if defaults don't suit.
+     Extend PROTECTED_BRANCHES if your primary branch isn't main/master.
   2. Edit .orchestra/OBJECTIVE.md with the brief for your first run
-  3. Commit .orchestra/CONFIG.md and .orchestra/OBJECTIVE.md to your base branch
+  3. Commit .orchestra/CONFIG.md and .orchestra/OBJECTIVE.md to your feature branch
   4. Run: .orchestra/runtime/bin/orchestra run
 EOF
 }
@@ -96,13 +101,82 @@ cmd_run() {
     apply_config_defaults
     validate_config || die "CONFIG.md validation failed"
 
-    local base_branch="${ORCHESTRA_CONFIG[BASE_BRANCH]}"
-    local worktree_base="${ORCHESTRA_CONFIG[WORKTREE_BASE]}"
     local tmux_prefix="${ORCHESTRA_CONFIG[TMUX_PREFIX]}"
 
-    mkdir -p "$worktree_base"
+    # ============================================================
+    # PREFLIGHT — per spec § 3.4. Run in this order; first failure
+    # exits non-zero with a specific cleanup recipe.
+    # (validate_config above already rejected obsolete BASE_BRANCH /
+    # WORKTREE_BASE keys.)
+    # ============================================================
 
-    # Atomic mkdir gate (spec Section 7) — retry up to 3x with fresh timestamp
+    # Preflight 1: Branch refusal. Hardcoded refusal on main/master,
+    # plus any entry in PROTECTED_BRANCHES.
+    local current_branch
+    current_branch="$(git -C "$project_dir" branch --show-current)"
+    [ -n "$current_branch" ] || die "could not determine current branch (detached HEAD?)"
+
+    local protected_csv="${ORCHESTRA_CONFIG[PROTECTED_BRANCHES]:-main,master}"
+    local -a protected_branches=(main master)
+    local _IFS_save="$IFS"
+    IFS=','
+    # shellcheck disable=SC2206
+    local -a _csv_parts=($protected_csv)
+    IFS="$_IFS_save"
+    local b
+    for b in "${_csv_parts[@]}"; do
+        [ -n "$b" ] && protected_branches+=("$b")
+    done
+
+    for b in "${protected_branches[@]}"; do
+        if [ "$current_branch" = "$b" ]; then
+            die "Refusing to run on protected branch '$current_branch'.
+Orchestra in run-in-place mode commits directly on HEAD. Running on
+'main' or any PROTECTED_BRANCHES entry would commit autonomously to a
+protected branch.
+Switch to a feature branch first:
+  git checkout -b feature/<your-slug>
+Or, if you want a different protected set, edit PROTECTED_BRANCHES in
+.orchestra/CONFIG.md."
+        fi
+    done
+
+    # Preflight 2: WORKTREE_PATH canary — catches inherited CONFIG.md
+    # from a sibling worktree. Compare resolved paths.
+    local declared_wt actual_wt
+    declared_wt="$(realpath "${ORCHESTRA_CONFIG[WORKTREE_PATH]}" 2>/dev/null || echo "")"
+    actual_wt="$(realpath "$project_dir")"
+    [ -n "$declared_wt" ] || die "WORKTREE_PATH in CONFIG.md is empty or does not resolve."
+    if [ "$declared_wt" != "$actual_wt" ]; then
+        die "WORKTREE_PATH canary mismatch.
+  CONFIG.md says: $declared_wt
+  Actual repo:    $actual_wt
+Likely cause: this .orchestra/CONFIG.md was inherited from a sibling
+worktree without updating WORKTREE_PATH.
+Fix: edit .orchestra/CONFIG.md and set WORKTREE_PATH to this worktree's
+absolute path ($actual_wt), then re-run."
+    fi
+
+    # Preflight 3: No prior non-archive run folder. Leftover from a
+    # crashed run, or a concurrent run from another tmux session.
+    local pre_existing
+    pre_existing=$(find "$orch/runs" -mindepth 1 -maxdepth 1 -type d -not -name archive 2>/dev/null || true)
+    if [ -n "$pre_existing" ]; then
+        die "A previous run folder still exists under .orchestra/runs/:
+$pre_existing
+
+Review the folder for unarchived work, then archive it via
+'orchestra reset' (moves to .orchestra/runs/archive/<ts>/) or remove
+it manually before starting a new run."
+    fi
+
+    # ============================================================
+    # End preflight. Allocate run folder + launch.
+    # ============================================================
+
+    # Atomic mkdir gate (spec Section 7) — retry up to 3x with fresh timestamp.
+    # Belt-and-braces against sub-second clock anomalies; the no-prior-run-folder
+    # preflight above already ensures the parent state is clean.
     local run_ts run_dir attempt=0
     local run_folder_root="$orch/runs"
     while [ $attempt -lt 3 ]; do
@@ -116,36 +190,40 @@ cmd_run() {
     done
     [ $attempt -lt 3 ] || die "Could not allocate a unique run timestamp after 3 attempts"
 
-    local worktree_dir="$worktree_base/run-$run_ts"
+    # Run-in-place: worktree IS the project dir; no separate run-branch.
+    local worktree_dir="$project_dir"
     local tmux_name="$tmux_prefix-$run_ts"
-    local run_branch="orchestra/run-$run_ts"
 
     # Setup-cleanup trap — clears the run folder if anything below fails before
     # the session loop is live (spec Section 7). ERR only — EXIT/INT/TERM are
     # reserved for the wind-down lock trap (Section 6.1).
     trap "rm -rf '$run_dir'" ERR
 
-    # Worktree creation
-    git -C "$project_dir" worktree add "$worktree_dir" -b "$run_branch" "$base_branch" \
-        || die "git worktree add failed"
-
     # Preflight: OBJECTIVE.md must exist in the worktree (per spec Section 4)
-    [ -f "$worktree_dir/.orchestra/OBJECTIVE.md" ] \
-        || die "OBJECTIVE.md not found in worktree — commit it to $base_branch and retry."
+    [ -f "$orch/OBJECTIVE.md" ] \
+        || die "OBJECTIVE.md not found in .orchestra/ — commit it to your feature branch and retry."
 
-    # Build the run folder INSIDE the worktree (per spec Section 5)
-    local wt_run_dir="$worktree_dir/.orchestra/runs/$run_ts"
-    mkdir -p "$wt_run_dir/9-sessions"
+    # Build the run folder directly at <project>/.orchestra/runs/<ts>/.
+    # The 3-TODO.md / 4-DECISIONS.md / 5-CHANGELOG.md files are NOT created
+    # in parcel-mode (the working sessions write Governance/pending/<hex>.md
+    # directly per spec § 3.6). Legacy-mode (project lacks Governance/CLAUDE.md
+    # + Governance/pending/) still gets 3/4/5 for the wind-down's compat path.
+    mkdir -p "$run_dir/9-sessions"
     # Activity log for Executor dispatches — the Organiser appends one
     # CSV line per Agent dispatch (timestamp,session,task,model,outcome,duration).
-    : > "$wt_run_dir/9-sessions/executor-activity.log"
-    cp "$worktree_dir/.orchestra/OBJECTIVE.md" "$wt_run_dir/2-OBJECTIVE.md"
-    : > "$wt_run_dir/1-INBOX.md"
-    : > "$wt_run_dir/3-TODO.md"
-    : > "$wt_run_dir/4-DECISIONS.md"
-    : > "$wt_run_dir/5-CHANGELOG.md"
-    : > "$wt_run_dir/6-HANDOVER.md"
-    : > "$wt_run_dir/7-SUMMARY.md"
+    : > "$run_dir/9-sessions/executor-activity.log"
+    cp "$orch/OBJECTIVE.md" "$run_dir/2-OBJECTIVE.md"
+    : > "$run_dir/1-INBOX.md"
+    : > "$run_dir/6-HANDOVER.md"
+    : > "$run_dir/7-SUMMARY.md"
+
+    # Legacy-mode (no Governance/CLAUDE.md + Governance/pending/) keeps 3/4/5
+    # so the wind-down's legacy Step 2 (append to parent files) has source files.
+    if [ ! -d "$project_dir/Governance/pending" ] || [ ! -f "$project_dir/Governance/CLAUDE.md" ]; then
+        : > "$run_dir/3-TODO.md"
+        : > "$run_dir/4-DECISIONS.md"
+        : > "$run_dir/5-CHANGELOG.md"
+    fi
 
     # Tmux conflict check
     if tmux has-session -t "$tmux_name" 2>/dev/null; then
@@ -158,19 +236,17 @@ cmd_run() {
     # Launch
     echo "Starting orchestra run in tmux session '$tmux_name'..."
     echo "  Worktree: $worktree_dir"
-    echo "  Run dir:  $wt_run_dir"
+    echo "  Run dir:  $run_dir"
     echo "  Attach:   tmux attach -t $tmux_name"
 
     # Use tmux -e for env passing and -c for cwd to avoid building a shell
     # command-string with interpolated quotes (no injection vector even if
     # config values contain shell metacharacters).
     tmux new-session -d -s "$tmux_name" -c "$worktree_dir" \
-        -e "RUN_DIR=$wt_run_dir" \
+        -e "RUN_DIR=$run_dir" \
         -e "WORKTREE_DIR=$worktree_dir" \
         -e "PROJECT_DIR=$project_dir" \
         -e "RUN_TS=$run_ts" \
-        -e "RUN_BRANCH=$run_branch" \
-        -e "BASE_BRANCH=$base_branch" \
         bash "$orch/runtime/bin/orchestrator.sh"
 }
 cmd_status() {
@@ -185,37 +261,30 @@ cmd_status() {
     parse_config_md "$orch/CONFIG.md" || die "CONFIG.md parse failed"
     apply_config_defaults
 
-    local worktree_base="${ORCHESTRA_CONFIG[WORKTREE_BASE]:-}"
     local tmux_prefix="${ORCHESTRA_CONFIG[TMUX_PREFIX]}"
-
-    [ -n "$worktree_base" ] || die "WORKTREE_BASE not set in CONFIG.md"
 
     echo "Active runs:"
 
-    # Iterate gate folders at <project>/.orchestra/runs/<ts>/, skipping archive/.
-    # Use find to avoid pipefail/ls trap when no entries exist.
-    local gate_dirs
-    gate_dirs=$(find "$orch/runs" -mindepth 1 -maxdepth 1 -type d -not -name archive 2>/dev/null | sort)
+    # In run-in-place, the run folder IS at <project>/.orchestra/runs/<ts>/
+    # (no separate worktree-side copy). Iterate those directly.
+    local run_dirs
+    run_dirs=$(find "$orch/runs" -mindepth 1 -maxdepth 1 -type d -not -name archive 2>/dev/null | sort)
 
     local printed_any=0
-    if [ -n "$gate_dirs" ]; then
-        local gate
-        while IFS= read -r gate; do
-            [ -n "$gate" ] || continue
+    if [ -n "$run_dirs" ]; then
+        local run
+        while IFS= read -r run; do
+            [ -n "$run" ] || continue
             local run_ts
-            run_ts="$(basename "$gate")"
-            local wt_run_dir="$worktree_base/run-$run_ts/.orchestra/runs/$run_ts"
+            run_ts="$(basename "$run")"
             local tmux_name="$tmux_prefix-$run_ts"
             local state
 
             # Marker presence is authoritative — checked BEFORE tmux liveness.
-            if [ -f "$wt_run_dir/BLOCKED" ]; then
+            if [ -f "$run/BLOCKED" ]; then
                 state="BLOCKED"
-            elif [ -f "$wt_run_dir/WIND-DOWN-FAILED" ]; then
+            elif [ -f "$run/WIND-DOWN-FAILED" ]; then
                 state="WIND-DOWN-FAILED"
-            elif [ ! -d "$wt_run_dir" ]; then
-                # Run dir was moved into archive — treat as archived.
-                state="archived"
             elif tmux has-session -t "$tmux_name" 2>/dev/null; then
                 state="active (tmux: $tmux_name)"
             else
@@ -224,17 +293,17 @@ cmd_status() {
 
             echo "  $run_ts: $state"
             printed_any=1
-        done <<< "$gate_dirs"
+        done <<< "$run_dirs"
     fi
 
     if [ "$printed_any" -eq 0 ]; then
         echo "  (no active runs)"
     fi
 
-    # Count archived runs across all worktrees.
+    # Count archived runs.
     local archived_count=0
-    if [ -d "$worktree_base" ]; then
-        archived_count=$(find "$worktree_base" -mindepth 5 -maxdepth 5 -type d -path '*/runs/archive/*' 2>/dev/null | wc -l)
+    if [ -d "$orch/runs/archive" ]; then
+        archived_count=$(find "$orch/runs/archive" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
     fi
     echo ""
     echo "Archived runs: $archived_count"
@@ -244,31 +313,24 @@ smoke_assert_common() {
     local tmpdir="$1"
     local archive
 
-    # `find` over globbed `ls` because under set -euo pipefail an `ls` with
-    # no matching glob exits 2, pipefail propagates, and set -e aborts the
-    # script with a silent exit 2 BEFORE the die message can fire. find
-    # returns 0 with empty output on no matches, so the assertion message
-    # is what surfaces on failure.
-    #
-    # Path layout (depths measured from $tmpdir/wt):
-    #   wt/run-<ts>                              = depth 1
-    #   wt/run-<ts>/.orchestra/runs              = depth 3
-    #   wt/run-<ts>/.orchestra/runs/<ts>         = depth 4   (active)
-    #   wt/run-<ts>/.orchestra/runs/archive      = depth 4
-    #   wt/run-<ts>/.orchestra/runs/archive/<ts> = depth 5   (archived)
-    archive=$(find "$tmpdir"/wt -mindepth 5 -maxdepth 5 -type d -path '*/runs/archive/*' -print -quit 2>/dev/null)
-    [ -n "$archive" ] || die "ASSERT FAIL: no archived run found"
+    # Run-in-place path layout (depths measured from $tmpdir):
+    #   .orchestra/runs                 = depth 2
+    #   .orchestra/runs/<ts>            = depth 3   (active)
+    #   .orchestra/runs/archive         = depth 3
+    #   .orchestra/runs/archive/<ts>    = depth 4   (archived)
+    archive=$(find "$tmpdir"/.orchestra/runs/archive -mindepth 1 -maxdepth 1 -type d -print -quit 2>/dev/null)
+    [ -n "$archive" ] || die "ASSERT FAIL: no archived run found at .orchestra/runs/archive/"
 
-    for f in 1-INBOX.md 2-OBJECTIVE.md 3-TODO.md 4-DECISIONS.md 5-CHANGELOG.md \
-             6-HANDOVER.md 7-SUMMARY.md 9-sessions; do
+    # Common files (parcel-mode skips 3/4/5; the smoke fixtures may be either mode).
+    for f in 1-INBOX.md 2-OBJECTIVE.md 6-HANDOVER.md 7-SUMMARY.md 9-sessions; do
         [ -e "$archive/$f" ] || die "ASSERT FAIL: missing $f in archive"
     done
 
-    # Active run dirs are at depth 4 directly under runs/ but NOT named archive.
+    # Active run dirs would be non-archive subfolders directly under .orchestra/runs/.
     # On a successful wind-down, the run dir was moved to archive/<ts>, so this
     # count must be 0.
     local active_count
-    active_count=$(find "$tmpdir"/wt -mindepth 4 -maxdepth 4 -type d -path '*/.orchestra/runs/*' -not -name archive 2>/dev/null | wc -l)
+    active_count=$(find "$tmpdir"/.orchestra/runs -mindepth 1 -maxdepth 1 -type d -not -name archive 2>/dev/null | wc -l)
     [ "$active_count" -eq 0 ] || die "ASSERT FAIL: active run folder remains (should be archived)"
 }
 
@@ -670,19 +732,12 @@ cmd_test() {
     cp -r "$fixture/." "$tmpdir/"
 
     cd "$tmpdir"
-    git init -q --initial-branch=master
-
-    # Local bare remote so wind-down's `git push origin master` has a target.
-    # The fixture has no real remote; without this, push fails and the run BLOCKs.
-    # Pin --initial-branch=master so the bare HEAD matches BASE_BRANCH (otherwise
-    # the bare repo's symbolic HEAD inherits the user's git default, often "main").
-    local bare="$tmpdir/origin.git"
-    git init -q --bare --initial-branch=master "$bare"
-    git remote add origin "$bare"
+    git init -q
+    # Run-in-place refuses on main/master; start on a feature branch.
+    git checkout -b feature/smoke -q 2>/dev/null || git branch -m feature/smoke 2>/dev/null
 
     git -c user.email=smoke@test -c user.name=smoke add -A
     git -c user.email=smoke@test -c user.name=smoke commit -q -m "smoke-test fixture init"
-    git -c user.email=smoke@test -c user.name=smoke push -q origin master
 
     "$SCRIPT_DIR/orchestra" init . >/dev/null
 
@@ -690,8 +745,7 @@ cmd_test() {
 - \`MAX_SESSIONS\`: 2
 - \`MAX_CONSECUTIVE_CRASHES\`: 1
 - \`ORGANISER_MODEL\`: opus
-- \`WORKTREE_BASE\`: $tmpdir/wt
-- \`BASE_BRANCH\`: master
+- \`WORKTREE_PATH\`: $(realpath "$tmpdir")
 - \`TMUX_PREFIX\`: orch-smoke
 - \`SMOKE_TEST_TIMEOUT\`: 900
 EOF
@@ -700,17 +754,23 @@ EOF
 
     git -c user.email=smoke@test -c user.name=smoke add -A
     git -c user.email=smoke@test -c user.name=smoke commit -q -m "smoke-test config + objective"
-    git -c user.email=smoke@test -c user.name=smoke push -q origin master
 
     .orchestra/runtime/bin/orchestra run
 
-    # Poll for the run worktree to appear, then poll for its tmux session to end.
-    local elapsed=0 timeout=900 worktree="" run_ts=""
+    # Poll for the run folder to appear at <tmpdir>/.orchestra/runs/<ts>/,
+    # then wait for its tmux session to end.
+    local elapsed=0 timeout=900 run_dir="" run_ts=""
     while [ $elapsed -lt $timeout ]; do
-        if [ -z "$worktree" ]; then
-            worktree=$(ls -d "$tmpdir"/wt/run-* 2>/dev/null | head -1 || true)
-            if [ -n "$worktree" ]; then
-                run_ts="${worktree##*/run-}"
+        if [ -z "$run_dir" ]; then
+            run_dir=$(find "$tmpdir/.orchestra/runs" -mindepth 1 -maxdepth 1 -type d -not -name archive 2>/dev/null | head -1 || true)
+            if [ -n "$run_dir" ]; then
+                run_ts="$(basename "$run_dir")"
+            else
+                # Run may already be archived (fast paths).
+                run_dir=$(find "$tmpdir/.orchestra/runs/archive" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1 || true)
+                if [ -n "$run_dir" ]; then
+                    run_ts="$(basename "$run_dir")"
+                fi
             fi
         fi
         if [ -n "$run_ts" ]; then
@@ -753,52 +813,31 @@ cmd_reset() {
     parse_config_md "$orch/CONFIG.md" || die "CONFIG.md parse failed"
     apply_config_defaults
 
-    local worktree_base="${ORCHESTRA_CONFIG[WORKTREE_BASE]:-}"
-    [ -n "$worktree_base" ] || die "WORKTREE_BASE not set in CONFIG.md"
-
     local archived=0
 
-    # For each worktree, archive any non-archive run dirs.
-    if [ -d "$worktree_base" ]; then
-        local worktrees
-        worktrees=$(find "$worktree_base" -mindepth 1 -maxdepth 1 -type d -name 'run-*' 2>/dev/null)
-        local wt
-        while IFS= read -r wt; do
-            [ -n "$wt" ] || continue
-            local runs_dir="$wt/.orchestra/runs"
-            [ -d "$runs_dir" ] || continue
-
-            # Active run dirs at <wt>/.orchestra/runs/<ts>/ (siblings of archive/).
-            local active_runs
-            active_runs=$(find "$runs_dir" -mindepth 1 -maxdepth 1 -type d -not -name archive 2>/dev/null)
-            local run
-            while IFS= read -r run; do
-                [ -n "$run" ] || continue
-                local run_ts
-                run_ts="$(basename "$run")"
-                mkdir -p "$runs_dir/archive"
-                mv "$run" "$runs_dir/archive/$run_ts"
-                archived=$((archived + 1))
-            done <<< "$active_runs"
-
-        done <<< "$worktrees"
+    # In run-in-place, run folders live at <project>/.orchestra/runs/<ts>/.
+    # Archive any non-archive subfolder.
+    local runs_dir="$orch/runs"
+    if [ -d "$runs_dir" ]; then
+        local active_runs
+        active_runs=$(find "$runs_dir" -mindepth 1 -maxdepth 1 -type d -not -name archive 2>/dev/null)
+        local run
+        while IFS= read -r run; do
+            [ -n "$run" ] || continue
+            local run_ts
+            run_ts="$(basename "$run")"
+            mkdir -p "$runs_dir/archive"
+            mv "$run" "$runs_dir/archive/$run_ts"
+            archived=$((archived + 1))
+        done <<< "$active_runs"
     fi
 
-    # Wind-down lock lives in the project tree (spec Section 7) — singular,
-    # serialises across worktrees. Remove if stale; orchestrator's own
-    # liveness/start-time check catches a still-running holder anyway.
+    # Wind-down lock lives at <project>/.orchestra/runs/.wind-down.lock.
+    # Remove if stale; orchestrator's own liveness/start-time check catches
+    # a still-running holder anyway.
     if [ -f "$orch/runs/.wind-down.lock" ]; then
         rm -f "$orch/runs/.wind-down.lock"
     fi
-
-    # Clean up project-tree gate folders (only if empty — they're just gate dirs).
-    local gate_dirs
-    gate_dirs=$(find "$orch/runs" -mindepth 1 -maxdepth 1 -type d -not -name archive 2>/dev/null)
-    local gate
-    while IFS= read -r gate; do
-        [ -n "$gate" ] || continue
-        rmdir "$gate" 2>/dev/null || true
-    done <<< "$gate_dirs"
 
     echo "Reset: $archived run folder(s) archived."
 }

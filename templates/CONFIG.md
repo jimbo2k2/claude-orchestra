@@ -32,8 +32,40 @@ be removed in a future release. If you have an older CONFIG.md, rename
 `MODEL` to `ORGANISER_MODEL`.
 
 ## Worktree
-- `WORKTREE_BASE`: /tmp/orchestra-myproject
-- `BASE_BRANCH`: main
+- `WORKTREE_PATH`: __WORKTREE_PATH__
+
+`WORKTREE_PATH` is a path canary: it must match the absolute path of
+this worktree on disk (`git rev-parse --show-toplevel`). `cmd_run`
+refuses to start on mismatch — this catches a stale `.orchestra/CONFIG.md`
+inherited from a sibling worktree. `cmd_init` substitutes
+`__WORKTREE_PATH__` at first-run setup; later worktrees must edit this
+manually.
+
+## Branch protection
+- `PROTECTED_BRANCHES`: main,master
+
+`PROTECTED_BRANCHES` is a comma-separated list of branch names
+`cmd_run` refuses to operate on. `main` and `master` are hardcoded
+fallbacks even if this key is removed. Extend (e.g. `main,master,develop`)
+for repos with a non-standard primary branch.
+
+## Project protocol
+- `PROTOCOL_FOLDER`:
+
+`PROTOCOL_FOLDER` is an optional path (relative to the worktree root)
+pointing at this project's task-protocol folder. When set, working-session
+prompts gain a one-line sentence pointing at the folder:
+
+  > This project's task protocol lives at `<PROTOCOL_FOLDER>`. Read it
+  > before starting work and follow its conventions where they apply
+  > to your task.
+
+The signal is soft — orchestra does NOT enforce that the working sessions
+follow the protocol. Leave empty to opt out (the templated sentence is
+removed from the prompts entirely).
+
+Example for a project with conventions at `Development/conventions/`:
+`PROTOCOL_FOLDER: Development/conventions/`
 
 ## Tmux
 - `TMUX_PREFIX`: orchestra

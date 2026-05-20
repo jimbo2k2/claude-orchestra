@@ -9,7 +9,20 @@ trap 'rm -rf "$TMP"' EXIT
 cd "$TMP"
 git init -q
 
-"$REPO/bin/orchestra" init . 2>&1
+init_output=$("$REPO/bin/orchestra" init . 2>&1)
+echo "$init_output"
+
+# Verify the Next-steps message references WORKTREE_PATH and not the obsolete keys.
+echo "$init_output" | grep -qi "WORKTREE_PATH" || { echo "init output should mention WORKTREE_PATH"; exit 1; }
+echo "$init_output" | grep -qiE "WORKTREE_BASE|BASE_BRANCH" && { echo "init output should NOT mention obsolete keys WORKTREE_BASE/BASE_BRANCH; got: $init_output"; exit 1; } || true
+
+# Verify __WORKTREE_PATH__ was substituted with the target dir.
+expected_path=$(realpath "$TMP")
+actual_path=$(grep -E "^- \`WORKTREE_PATH\`:" .orchestra/CONFIG.md | sed -E 's/^- `WORKTREE_PATH`: *//')
+[ "$actual_path" = "$expected_path" ] || { echo "WORKTREE_PATH substitution failed: expected '$expected_path', got '$actual_path'"; exit 1; }
+
+# Verify no unsubstituted __SENTINEL__ tokens remain in CONFIG.md.
+grep -q "__WORKTREE_PATH__" .orchestra/CONFIG.md && { echo "unsubstituted __WORKTREE_PATH__ in CONFIG.md"; exit 1; } || true
 
 # Layout assertions
 [ -d .orchestra/runtime/bin ] || { echo "missing runtime/bin"; exit 1; }

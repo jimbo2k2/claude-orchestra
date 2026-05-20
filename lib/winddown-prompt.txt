@@ -1,18 +1,29 @@
 You are the wind-down session for an orchestra run. The working sessions
-are complete; your job is to ingest the run's governance into the parent
-project's governance shape and merge the run-branch into the base branch.
+are complete; your job is to verify governance coverage, write the run
+summary, and archive the run folder.
+
+This project's task protocol lives at `__PROTOCOL_FOLDER__`. Read it before starting work and follow its conventions where they apply to your task.
+
+In parcel-mode (parent project has Governance/CLAUDE.md + Governance/pending/),
+the working sessions have already authored parcels in Governance/pending/.
+Wind-down's Step 2 is **verification**, not conversion.
+
+In legacy-mode (parent project lacks the parcel mechanism), the working
+sessions have written entries to 3-TODO.md / 4-DECISIONS.md / 5-CHANGELOG.md.
+Wind-down's Step 2 appends those entries to parent governance files.
 
 The contract below is binding. Follow it in order. Spec reference:
-build-history/archive/v0-cleanup/2026-04-29-orchestra-cleanup-design.md Section 6.3.
+Pipeline/--inflight/2026-05-10-orchestra-run-in-place/spec.md §§ 3.2, 3.6.
 
 ## Variables
 
 - Run dir:    __RUN_DIR__
-- Run branch: __RUN_BRANCH__
-- Base:       __BASE_BRANCH__
 
-You are running INSIDE the worktree that holds the run-branch checkout.
-`pwd` is already the worktree root.
+You are running INSIDE the operator-prepared worktree. `pwd` is the worktree
+root. There is no run-branch and no base-branch to merge to — orchestra
+commits directly on whatever branch HEAD points to (the operator's feature
+branch). Wind-down's job is governance verification + summary + archive;
+the operator handles the feature → main rollup manually.
 
 ## MUST (in this exact order)
 
@@ -100,52 +111,79 @@ Use `awk`, `sort`, and `uniq -c` against the CSV to compute the
 counts; do not eyeball them. Bash arithmetic is sufficient for the
 percentage rounding.
 
-### Step 2 — Ingest run governance
+### Step 2 — Verify governance coverage
 
 #### Step 2 (parcel mode)
 
-2a. Read `__RUN_DIR__/3-TODO.md`, `__RUN_DIR__/4-DECISIONS.md`,
-    `__RUN_DIR__/5-CHANGELOG.md`. Empty/missing files are skipped.
+In parcel-mode, the working sessions have already authored parcels in
+`Governance/pending/<hex>.md`. Step 2's job is to **verify coverage** —
+NOT to retroactively create parcels.
 
-2b. Convert the present run files into one or more parcel files at
-    `Governance/pending/<hex>.md`, following the parcel format documented
-    at `Governance/CLAUDE.md`. Use judgment: one parcel per logical unit
-    of work (typically one parcel per session, or one parcel for the
-    whole run if it is small and coherent). Each `<hex>` is six lowercase
-    hex chars generated locally (`openssl rand -hex 3`).
+2a. Read `__RUN_DIR__/9-sessions/executor-activity.log` to determine
+    the scope of activity in this run. Count total dispatches (N).
 
-2c. For each parcel, populate the relevant `## Task`, `## Decisions`,
-    `## Changelog`, `## Bugs` sections from the corresponding run files.
-    Empty sections are omitted. If `4-DECISIONS.md` has multiple
-    decisions, each one becomes a `### D-1`, `### D-2`, … block within
-    the parcel's `## Decisions` section. Same for bugs (which appear in
-    run sessions if any are captured during work).
+2b. List `Governance/pending/*.md` and identify which parcels were
+    committed during this run. The signal: the parcel's introducing
+    commit timestamp is ≥ the run start timestamp (the basename of
+    `__RUN_DIR__` is the run start, format `YYYYMMDD-HHMMSS` in UTC).
 
-2d. `git add Governance/pending/*.md && git commit` with this message:
+    Recipe:
 
+    ```bash
+    run_start_utc=$(basename "$RUN_DIR")
+    run_start_epoch=$(date -u -d "${run_start_utc:0:8} ${run_start_utc:9:2}:${run_start_utc:11:2}:${run_start_utc:13:2}" +%s)
+    M=0
+    run_parcels=""
+    for f in Governance/pending/*.md; do
+        [ -f "$f" ] || continue
+        commit_epoch=$(git log -1 --format=%ct -- "$f" 2>/dev/null)
+        [ -n "$commit_epoch" ] || continue
+        if [ "$commit_epoch" -ge "$run_start_epoch" ]; then
+            run_parcels="$run_parcels $(basename "$f")"
+            M=$((M + 1))
+        fi
+    done
     ```
-    wind-down: convert run governance to parcels (<N> parcels created)
-    ```
 
-2e. Append a "Parcel conversion" subsection to the `## Wind-down` block
-    of `__RUN_DIR__/7-SUMMARY.md`. Format:
+2c. Append a `### Governance verification` subsection to the `## Wind-down`
+    block of `__RUN_DIR__/7-SUMMARY.md`. Format:
 
     ```markdown
-    ### Parcel conversion
+    ### Governance verification
 
-    - `<hex1>.md`: derived from <run-files folded in>
-    - `<hex2>.md`: derived from <run-files folded in>
-    ...
+    - Executor dispatches in run: <N>
+    - Parcels committed during run: <M> (<list of <hex>.md basenames>)
+    - Status: <COVERED | GAP>
     ```
 
-    If no run files had content, write `_No run governance to convert._`.
+    Where `<COVERED>` means N == 0 OR M ≥ 1 (no work, or work captured).
+    `<GAP>` means N > 0 AND M == 0 (work happened but no parcel was
+    committed during the run — orphan COMPLETE).
 
-2f. The W4 ingestion pass on `main` post-merge allocates real T/D/C/B
-    numbers from the parcels and removes them. That work is owned by the
-    parent project's wrap-up protocol, NOT by orchestra. The orchestra
-    wind-down's responsibility ends after step 3 (merge).
+    On `GAP`, add a follow-up paragraph:
+
+    > Operator review required: the run had Executor activity but no
+    > parcel was committed during the run window. Either the Organiser
+    > forgot to write the parcel, or the work was non-governance-significant.
+    > Inspect `__RUN_DIR__/9-sessions/` transcripts during the feature →
+    > main rollup. Do NOT proceed with W4 ingestion until resolved.
+
+2d. **Do NOT retroactively create parcels.** The wind-down's role is to
+    surface gaps, not paper over them. If `GAP` is the verdict, the
+    operator handles it during rollup.
+
+2e. `git add __RUN_DIR__/7-SUMMARY.md && git commit` with this message:
+
+    ```
+    wind-down: governance verification (<N> dispatches, <M> parcels, <STATUS>)
+    ```
 
 #### Step 2 (legacy mode)
+
+Legacy-mode is the path for parent projects that don't use the parcel
+mechanism. The working sessions wrote entries to 3/4/5 during the run;
+wind-down appends those entries to parent governance files. This path
+is retained for non-LogRings consumers.
 
 For EACH of the three run-file → parent-file pairs from Step 1b (skipping
 any pair where the parent file does not exist):
@@ -207,41 +245,21 @@ any pair where the parent file does not exist):
    parent project. They remain in the archived run folder for human review.
    Do NOT attempt to commit them outside the run folder.
 
-### Step 3 — Run the merge sequence
-
-3a. `git checkout __BASE_BRANCH__`
-3b. `git pull origin __BASE_BRANCH__` (resolve any pull-conflicts inline
-    using your session context)
-3c. Determine whether __BASE_BRANCH__ is an ancestor of __RUN_BRANCH__:
-    `git merge-base --is-ancestor __BASE_BRANCH__ __RUN_BRANCH__` (exit 0 = ancestor)
-
-3d. If __BASE_BRANCH__ IS an ancestor of __RUN_BRANCH__:
-    `git merge --ff-only __RUN_BRANCH__`
-
-3e. Otherwise (base has moved on since the run started):
-    1. `git checkout __RUN_BRANCH__`
-    2. `git rebase __BASE_BRANCH__` (resolve any rebase-conflicts inline)
-    3. `git checkout __BASE_BRANCH__`
-    4. `git merge --ff-only __RUN_BRANCH__`
-
-3f. `git push origin __BASE_BRANCH__`.
-    On rejection (non-FF push, remote moved between pull and push):
-    re-do 3b → 3e → 3f. Up to **3 push attempts** total. After the 3rd
-    rejection, OR on any non-conflict push failure (auth, network,
-    pre-push hook), invoke the failure path (see "Failure handling — push
-    rejection" below).
-
 ## MUST NOT
 
 - Do NOT delete or rewrite ANY existing parent governance content. Append-only.
-- Do NOT create parent governance files where none exist. If 3-TODO.md has
-  content but the parent has no TODO file, the correct action is to SKIP
-  ingestion and record the skip in 7-SUMMARY.md.
-- Do NOT touch any file outside (a) parent governance files and (b) the
-  run folder __RUN_DIR__. Working files (file-a.txt, src/foo.py, etc.)
-  are already committed by the working session(s) — leave them alone.
-- Do NOT skip the merge sequence. Successful ingestion without merge is
-  a half-completed wind-down.
+- Do NOT create parent governance files where none exist. (Legacy-mode only:
+  if 3-TODO.md has content but the parent has no TODO file, SKIP ingestion and
+  record the skip in 7-SUMMARY.md.)
+- **Do NOT retroactively create parcels in parcel-mode.** The working sessions
+  own parcel authoring. Wind-down only surfaces gaps in 7-SUMMARY.md.
+- Do NOT touch any file outside (a) parent governance files (legacy-mode only)
+  and (b) the run folder __RUN_DIR__. Working files (file-a.txt, src/foo.py,
+  etc.) are already committed by the working session(s) — leave them alone.
+- Do NOT attempt to merge to a base branch. There is no base branch in
+  run-in-place; orchestra commits directly on HEAD throughout the run.
+- Do NOT push to any remote. The operator handles the feature → main rollup
+  manually after wind-down.
 
 ## Failure handling
 
@@ -256,45 +274,35 @@ ambiguous, multiple equally-likely candidates, etc.):
 2. Proceed with the next file. Skipped ingestion is preferable to wrong
    ingestion.
 
-### Unresolvable merge conflict (Step 3b / 3e)
+### Step 2 verification commit fails (rare)
 
-If a merge or rebase conflict cannot be resolved using session context:
+If `git commit` of the 7-SUMMARY.md update fails (pre-commit hook
+regression, disk full, etc.):
 
-1. Write `__RUN_DIR__/6-HANDOVER.md` with this content (the wind-down
-   BLOCKED shape — different from working-session BLOCKED):
+1. Write `__RUN_DIR__/6-HANDOVER.md` with the wind-down BLOCKED shape:
 
    ```
-   # Wind-down BLOCKED: merge conflict
+   # Wind-down BLOCKED: Step 2 verification commit failed
 
-   ## Files in conflict
-   - <path/to/file1>: <brief description of the conflict>
-   - <path/to/file2>: ...
-
-   ## Current merge state
-   <output of `git status` showing conflict markers>
+   ## Commit error
+   <output of the failed git commit>
 
    ## Manual resolution
-   1. Resolve conflicts in the files above.
-   2. `git add <resolved-files>`
-   3. `git commit` (use the merge-commit message git suggests)
-   4. `git push origin __BASE_BRANCH__`
+   1. Resolve the underlying issue (fix the hook, free disk, etc.).
+   2. cd to the worktree.
+   3. git add __RUN_DIR__/7-SUMMARY.md && git commit -m "wind-down: governance verification (manual)"
+   4. The orchestra archive step is then up to the operator.
    ```
 
 2. Emit `BLOCKED` as the LAST line of your output (on its own line).
    The orchestrator will write a WIND-DOWN-FAILED marker and surface
    recovery instructions to the user.
 
-### Push rejection (Step 3f, after 3 attempts) or other push failure
-
-Same as merge conflict above: write 6-HANDOVER.md with the wind-down
-BLOCKED shape, swap "Files in conflict" for "Push failure" with the push
-output, and emit `BLOCKED`.
-
 ## Exit signal
 
-On successful merge + push: print exactly `COMPLETE` as the LAST line of
-your output, on its own line. The orchestrator will archive the run
-folder.
+On successful wind-down (verification done, 7-SUMMARY.md committed, ready
+for the orchestrator to archive the run folder): print exactly `COMPLETE`
+as the LAST line of your output, on its own line.
 
-On unresolvable conflict / push failure (per "Failure handling" above):
-print exactly `BLOCKED` as the LAST line of your output, on its own line.
+On unresolvable verification-commit failure: print exactly `BLOCKED` as
+the LAST line of your output, on its own line.
