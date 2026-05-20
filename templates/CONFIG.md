@@ -32,8 +32,22 @@ be removed in a future release. If you have an older CONFIG.md, rename
 `MODEL` to `ORGANISER_MODEL`.
 
 ## Worktree
-- `WORKTREE_BASE`: /tmp/orchestra-myproject
-- `BASE_BRANCH`: main
+- `WORKTREE_PATH`: __WORKTREE_PATH__
+
+`WORKTREE_PATH` is a path canary: it must match the absolute path of
+this worktree on disk (`git rev-parse --show-toplevel`). `cmd_run`
+refuses to start on mismatch — this catches a stale `.orchestra/CONFIG.md`
+inherited from a sibling worktree. `cmd_init` substitutes
+`__WORKTREE_PATH__` at first-run setup; later worktrees must edit this
+manually.
+
+## Branch protection
+- `PROTECTED_BRANCHES`: main,master
+
+`PROTECTED_BRANCHES` is a comma-separated list of branch names
+`cmd_run` refuses to operate on. `main` and `master` are hardcoded
+fallbacks even if this key is removed. Extend (e.g. `main,master,develop`)
+for repos with a non-standard primary branch.
 
 ## Tmux
 - `TMUX_PREFIX`: orchestra
