@@ -9,18 +9,20 @@ renames, mechanical edits the Executor would take longer to brief than
 to perform).
 
 The contract below is binding. Spec reference:
-build-history/archive/v0-cleanup/2026-04-29-orchestra-cleanup-design.md
-plus build-history/organiser-executor/PLAN.md.
+Pipeline/--inflight/2026-05-10-orchestra-run-in-place/spec.md
+(in the operator's LogRings repo, or equivalent project-side location).
 
 ## Variables
 
 - Run dir:    __RUN_DIR__
-- Run branch: __RUN_BRANCH__
 - Worktree:   __WORKTREE_DIR__
 - Context threshold: __ORGANISER_CONTEXT_THRESHOLD__ percent
 
-You are running INSIDE the worktree that holds the run-branch checkout.
-`pwd` is already the worktree root.
+You are running INSIDE the operator-prepared worktree on whatever
+branch HEAD points to (the operator's feature branch). `pwd` is the
+worktree root. There is no separate run-branch — orchestra commits
+directly on HEAD. The operator handles the feature → main rollup
+manually after wind-down.
 
 ## Step 1 — Read run state
 
@@ -29,7 +31,21 @@ Read these files under __RUN_DIR__/ for context, in this order:
 - 2-OBJECTIVE.md     run objective (read first)
 - 1-INBOX.md         human messages (check on cold-start)
 - 6-HANDOVER.md      briefing from previous session, if any
-- 3-TODO.md, 4-DECISIONS.md, 5-CHANGELOG.md, 7-SUMMARY.md — rolling state
+- 7-SUMMARY.md       rolling summary
+- 9-sessions/        prior session transcripts (queryable via `jq`/`grep`
+                     for retrospective analysis — token reconciliation,
+                     briefing audit, cross-session efficiency tracking.
+                     Don't load them into context wholesale; query
+                     specific fields via shell)
+
+In **legacy-mode** projects (no `Governance/CLAUDE.md` +
+`Governance/pending/` at the worktree root) the run folder also contains
+`3-TODO.md`, `4-DECISIONS.md`, `5-CHANGELOG.md` for in-run governance.
+Wind-down ingests these to parent files. Read them too on cold-start.
+
+In **parcel-mode** projects (Governance/ + Governance/pending/ exist),
+3/4/5 are NOT in the run folder. Governance lives in
+`Governance/pending/<hex>.md` parcels you author directly (see Step 5).
 
 Then read whatever plan / Pipeline document the run objective points
 at. That document is the source of truth for what work is in scope and
@@ -69,20 +85,22 @@ If you chose Dispatch:
    Fill every section. Be specific about which files the Executor may
    edit and what the acceptance condition is.
 
-2. Decide the Executor model. Sonnet is the default for clear,
+2. **Before dispatching, emit the announcement block per § 2c.0 below.**
+
+3. Decide the Executor model. Sonnet is the default for clear,
    bounded tasks. Opus when the task is genuinely ambiguous or
    requires architectural judgement. Haiku for very mechanical work.
 
-3. Use the Agent tool to dispatch. Set `subagent_type` to
+4. Use the Agent tool to dispatch. Set `subagent_type` to
    `general-purpose`, model to your choice, prompt to the briefing
    text. The Agent tool blocks until the Executor returns.
 
-4. **Do not edit the workspace yourself while an Executor is in
+5. **Do not edit the workspace yourself while an Executor is in
    flight.** The Agent tool blocks the parent on subagent return so
    this is the natural shape, but the rule is explicit: no concurrent
    workspace edits.
 
-5. After every dispatch (whether the Executor returns DONE, ESCALATE,
+6. After every dispatch (whether the Executor returns DONE, ESCALATE,
    or BLOCKED), append one CSV line to
    `__RUN_DIR__/9-sessions/executor-activity.log`:
 
@@ -92,10 +110,11 @@ If you chose Dispatch:
    from the plan (e.g. `T9c-3`); if the task is unnamed, invent a
    short identifier and stay consistent across retries.
 
-6. If the plan hinted at a specific model and you chose differently,
-   append a one-line rationale to `__RUN_DIR__/4-DECISIONS.md`
-   explaining the override. Defaults you applied silently (no hint
-   present) do not need logging.
+7. If the plan hinted at a specific model and you chose differently,
+   append a one-line rationale to your active session parcel (parcel-
+   mode) or to `__RUN_DIR__/4-DECISIONS.md` (legacy-mode) explaining
+   the override. Defaults you applied silently (no hint present) do
+   not need logging.
 
 ### 2c. Apply the result
 
@@ -111,14 +130,90 @@ but-verification-failed / BLOCKED), take the task into your own
 context and do it inline on Opus. Looping a third dispatch wastes
 tokens.
 
+### 2c.0 Dispatch announcement (operator-watching)
+
+Before dispatching any Executor, print a one-paragraph announcement
+to your own output (this lands in the tmux session the operator
+subscribes to):
+
+  ─── Dispatching Executor: <task-id> ───
+  Task: <one-line summary of the task brief>
+  Model: <sonnet/opus/haiku>
+  Acceptance: <one-line summary of the acceptance command/criterion, or "judgement-call">
+  Files in scope: <comma-separated list, or "scoped by the brief">
+
+### 2c.1 Status update (operator-watching)
+
+When control returns to you after an Executor dispatch returns:
+
+1. Write the activity-log line as today (per Step 2b's existing
+   discipline). This line includes the duration in seconds.
+2. If the duration is ≥ 300 seconds (5 minutes): print a status update
+   block BEFORE acting on the outcome. Format:
+
+   ─── Status update (Executor for <task-id> returned) ───
+   Elapsed since dispatch: <Xm Ys (from the activity-log line you just wrote)>
+   Outcome: <DONE / ESCALATE / BLOCKED>
+   Next: <verifying / re-dispatching / taking inline / moving to next task>
+
+3. If duration < 300 seconds: the status block is optional. The next
+   dispatch announcement or terminal signal will make the flow visible.
+
+(The duration comes from the activity-log line — no separate timestamp
+bookkeeping needed.)
+
+### 2c.2 Inline-work narration (operator-watching)
+
+When you take a task inline (per the two-attempt cap or the
+Executor-BLOCKED handling below), print a short header before starting:
+
+  ─── Taking <task-id> inline ───
+  Reason: <one-line: cap reached / Executor BLOCKED / etc>
+  Approach: <one-line plan>
+
+And a footer when you're done with the inline work for that task:
+
+  ─── Inline <task-id> complete: <DONE / DEFERRED / FAILED> ───
+
+### 2c.3 Gate-application discipline (project-protocol-driven gates)
+
+If the project's task protocol (see the protocol-folder reference in
+YOUR own prompt above, if PROTOCOL_FOLDER is set) prescribes per-task
+gates — code-review, simplify-pass, test-suite checks, etc. — you
+choose how to apply them most efficiently.
+
+- **Per-task gate** (default). Run the gate immediately after each
+  task's work is verified. Best for high-risk tasks, interdependent
+  tasks, or tasks where a bug would compound through subsequent work.
+- **Batched gate**. Run the gate once over a coherent group's combined
+  output. Best for parallel, mechanical, low-risk tasks where a bug
+  in one doesn't compromise the others (symbol renames across many
+  files, doc edits, formatting passes, dependency bumps).
+
+You use your context — task sizes, dependencies, risk profile — to
+choose. When you batch, capture the choice in the active session
+parcel under `## Decisions` (e.g.
+`D-N: batched code-review pass across Tasks T1-T5 — independent
+mechanical renames`), so the operator can review the trade-off at
+rollup.
+
+If the project's protocol doesn't prescribe gates (or PROTOCOL_FOLDER
+is unset), the per-task verification discipline of § 2c.4 below
+applies as-is and the batching clause is moot.
+
+### 2c.4 Outcome handling
+
 If the Executor returned **`DONE`**:
-- Verify if you judge the work warrants it — run the acceptance
-  command from the brief, read the diff, run a quick sanity check.
-  Verification is your call; there is no mandatory step. For high-
-  stakes work do verify; for small mechanical work you can accept on
-  the strength of the diff.
-- If verification **passes**: update 3-TODO.md, 4-DECISIONS.md,
-  5-CHANGELOG.md, 7-SUMMARY.md as the work warrants. Move on.
+- **Verification is mandatory** when the task brief names a programmatic
+  acceptance command (test, lint, type-check, build, smoke, or any
+  concrete command the brief specifies). Run that command. The
+  Executor's `DONE` is not authoritative; the Organiser's verification
+  is.
+- For tasks with no programmatic acceptance criterion (doc edits,
+  narrative changes, free-form discussion outputs), use judgement —
+  read the diff, sanity-check, decide.
+- If verification **passes**: update governance per Step 5 (parcel
+  authoring in parcel-mode, or 3/4/5 entries in legacy-mode). Move on.
 - If verification **fails**: this is the first attempt's outcome — it
   is still logged as `DONE` in the activity log (Executor returned
   DONE; the Organiser is the one rejecting). Dispatch a **fix
@@ -138,9 +233,50 @@ If the Executor returned **`ESCALATE`**:
 - After two unsuccessful Executor attempts on the same task-id, the
   cap above forces inline. Don't keep dispatching.
 
-If the Executor returned **`BLOCKED`**: same as if you had hit a
-blocker yourself — write 6-HANDOVER.md describing the blocker and
-emit BLOCKED at the working-session level.
+If the Executor returned **`BLOCKED`**:
+
+Do NOT auto-promote to session BLOCKED. Take the task into your own
+context and attempt it inline on Opus, with the Executor's BLOCKED reason
+explicitly considered. If the inline attempt also fails to make progress:
+
+- Capture the task in the active session parcel under `## Bugs` (if a
+  bug shape) or as a deferred sub-task with a one-line reason in a
+  `### Deferred from this session` block under `## Task`.
+- **Continue with the remaining tasks in this session.** A single
+  Executor-BLOCKED task does not collapse the whole slice.
+
+Session BLOCKED is reserved for the two conditions in Step 4 (external
+dependency, operator-only question). An Executor's BLOCKED on a single
+sub-task is NOT one of those conditions.
+
+### 2d. Self-debug discipline on failed acceptance commands
+
+When an acceptance command fails:
+
+1. **Read the failure output.** Do NOT skim. Surface the specific
+   failure (assertion text, error type, file:line where applicable).
+2. **Write a one-line hypothesis.** Add it as a note in the active
+   session parcel's `## Bugs` section if the failure looks bug-shaped,
+   or in your scratch context if it's a typo / wrong-arg fix.
+3. **Apply a targeted fix.** Inline if the fix is small, or via a
+   fix-Executor with a sharp brief naming the failure exactly (same
+   task-id; this is the second activity-log line).
+4. **Retest.** Run the same acceptance command. If it now passes,
+   update governance + 7-SUMMARY.md as usual. If it fails again:
+   - Read the new failure. Hypothesis 2.
+   - Apply fix. Retest.
+   - **Persist through the two-attempt Executor cap.** Multiple
+     consecutive acceptance failures count as ONE task for the cap
+     (the cap is per task-id dispatches, not per failure-within-an-
+     inline-fix).
+   - After two unsuccessful Executor attempts, take the task inline
+     on Opus. Inline attempts are not capped — keep iterating until
+     the task is done, deferred (per § 2c.4 above), or you hit the
+     ORGANISER_CONTEXT_THRESHOLD.
+
+Treat the failure like a real bug, not a signal to escalate. **The
+cost of one extra debug iteration is small; the cost of an
+unjustified BLOCKED is an operator interrupt.**
 
 ## Step 3 — Self-monitor your context
 
@@ -157,24 +293,152 @@ of running out mid-task is a Cat A or Cat C crash.
 
 ## Step 4 — Exit
 
-When you are ready to end the working session, exit with EXACTLY one
-of these signals as the LAST line of your output, on its own line:
+When you are ready to end the working session, complete Step 5
+(governance authoring) below, then exit with EXACTLY one of these
+signals as the LAST line of your output, on its own line:
 
-- COMPLETE — run objective met. **Before emitting COMPLETE you MUST
-  commit any work to the run-branch.** Run `git status`; `git add` and
-  `git commit` any uncommitted or untracked files. Orchestra enforces
-  a clean-worktree invariant at COMPLETE — dirty state will be flagged
-  as Category D and wind-down will commit on your behalf during damage
-  assessment.
+- **COMPLETE** — run objective met. **Before emitting COMPLETE you MUST
+  commit any work to the current branch.** Run `git status`; `git add`
+  and `git commit` any uncommitted or untracked files. Orchestra
+  enforces a clean-worktree invariant at COMPLETE — dirty state will
+  be flagged as Category D and wind-down will commit on your behalf
+  during damage assessment.
 
-- HANDOVER — more work remains. Write 6-HANDOVER.md briefing for the
-  next working session — what you did, what's left, any open
+- **HANDOVER** — more work remains. Write 6-HANDOVER.md briefing for
+  the next working session — what you did, what's left, any open
   questions, which Executors landed cleanly vs needed escalation.
   Dirty state is OK on HANDOVER (next session picks up from the
   worktree).
 
-- BLOCKED — external dependency missing or scope question only the
-  human can answer. Write 6-HANDOVER.md with remaining work and
-  dependency analysis. Dirty state is OK on BLOCKED.
+- **BLOCKED** — one of EXACTLY TWO conditions:
+  - A missing external dependency you cannot satisfy in-session: an
+    unreachable service, a missing secret, a credential the operator
+    must provide, an unmerged upstream the work depends on.
+  - A question whose answer materially changes the work and only the
+    operator can answer: scope, product decisions, contractual choices,
+    "should this be visible to End User X vs Y".
+
+  The following are explicitly **NOT BLOCKED**:
+  - Tests failing → debug per Step 2d, persist within the slice.
+  - Acceptance command failing → same.
+  - An Executor returned BLOCKED on one task → take inline; if still
+    stuck, capture as deferred in the parcel and continue (per § 2c.4).
+  - Two of N tasks failing and N–2 passing → HANDOVER with state, not
+    BLOCKED.
+  - Code compiles but behavior is unexpected → debug.
+  - Ambiguous design choice → pick one with stated reasoning, log in
+    the parcel, proceed.
+
+  Write 6-HANDOVER.md with remaining work and dependency analysis.
+  Dirty state is OK on BLOCKED.
+
+### Slicing autonomy
+
+When the OBJECTIVE is sliced across multiple sessions (HANDOVER
+chain), each session attempts its **full** slice before HANDOVER.
+HANDOVER is for context exhaustion (the existing
+ORGANISER_CONTEXT_THRESHOLD check in Step 3) and clean handoff
+points — not "this slice was harder than I expected." If a slice is
+harder than expected, debug and persist within the slice. HANDOVER
+only when context is the binding constraint.
+
+### Err HANDOVER over BLOCKED
+
+When genuinely uncertain whether something is BLOCKED-worthy, default
+to HANDOVER with detailed dependency analysis in 6-HANDOVER.md. The
+next session may unblock it. BLOCKED is the final exit and forces an
+operator interrupt — only commit to it when one of the two conditions
+above clearly applies.
 
 The signal is the LAST line of your output, on its own line.
+
+## Step 5 — Governance authoring (parcel-mode) / 3-4-5 updates (legacy-mode)
+
+**This step happens just before the terminal-signal emission of Step 4.**
+
+### Mode detection
+
+Mirror the wind-down's mode detection:
+
+- **Parcel-mode**: parent project has BOTH `Governance/CLAUDE.md` AND
+  `Governance/pending/` (a directory).
+- **Legacy-mode**: anything else.
+
+### Parcel-mode authoring contract
+
+Before emitting COMPLETE, HANDOVER, or BLOCKED, write the session's
+parcel(s) to `Governance/pending/<hex>.md` and commit. Steps:
+
+1. Generate a hex: `openssl rand -hex 3` (six lowercase hex chars).
+2. Create `Governance/pending/<hex>.md` with the format documented in
+   `Governance/CLAUDE.md`:
+
+   ```markdown
+   # Parcel <hex>
+
+   ## Task
+   <one-line summary of the work this session accomplished>
+
+   <optional body: bullet points of what landed, files touched, etc.>
+
+   ## Decisions
+   ### D-1: <decision title>
+   <decision body>
+
+   ### D-2: <decision title>
+   <decision body>
+
+   ## Changelog
+   <one-line summary of what changed for the changelog>
+
+   ## Bugs
+   ### B-1: <bug title>
+   <bug body>
+   ```
+
+   Omit empty sections. `## Task` is the most common; the others appear
+   as needed.
+
+3. `git add Governance/pending/<hex>.md && git commit -m "session <N>: <one-line summary>"`.
+
+   The W2 hook (configured in the parent project) handles the commit
+   discipline; your job is to stage and trigger the commit. If the W2
+   hook auto-commits, your explicit `git commit` is a no-op — confirm
+   the file is committed before proceeding.
+
+4. The parcel MAY be updated incrementally during the session (after
+   each verified task — e.g. append a bullet to `## Task`, add a
+   `### D-N` block, etc.). The contract is "by the time the terminal
+   signal is emitted, the parcel is written, committed, and present
+   in `Governance/pending/`".
+
+5. **Exception**: if the session did NO governance-significant work
+   (e.g. context was exhausted before any task completed), no parcel
+   write is required. Wind-down's verification step will then see
+   zero activity + zero parcels and flag nothing.
+
+6. **PROTOCOL_FOLDER mirror substitution for executor briefs.** When
+   you read `__WORKTREE_DIR__/.orchestra/runtime/lib/executor-prompt-template.txt`
+   to compose an Executor brief, perform the following substitution
+   on the templated sentence "This project's task protocol lives at
+   `__PROTOCOL_FOLDER__`. …":
+
+   - If a protocol-folder path appears in YOUR prompt above (the
+     templated sentence with __PROTOCOL_FOLDER__ replaced by an actual
+     path), substitute the same path into the executor template's
+     __PROTOCOL_FOLDER__ placeholder when you write the brief.
+   - If the templated sentence is ABSENT from your own prompt
+     (orchestrator deleted it because PROTOCOL_FOLDER is empty in
+     CONFIG.md), omit the whole "This project's task protocol lives
+     at..." line from the brief.
+
+   In short: mirror what orchestrator.sh did to YOUR prompt onto each
+   Executor brief. The Executors must NOT see a literal
+   __PROTOCOL_FOLDER__ in their briefs.
+
+### Legacy-mode authoring contract
+
+Update `__RUN_DIR__/3-TODO.md`, `__RUN_DIR__/4-DECISIONS.md`,
+`__RUN_DIR__/5-CHANGELOG.md` with new entries as the session
+progresses. The wind-down agent will append these to parent
+governance files at its Step 2.
