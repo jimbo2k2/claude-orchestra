@@ -49,6 +49,24 @@ manually.
 fallbacks even if this key is removed. Extend (e.g. `main,master,develop`)
 for repos with a non-standard primary branch.
 
+## Project protocol
+- `PROTOCOL_FOLDER`:
+
+`PROTOCOL_FOLDER` is an optional path (relative to the worktree root)
+pointing at this project's task-protocol folder. When set, working-session
+prompts gain a one-line sentence pointing at the folder:
+
+  > This project's task protocol lives at `<PROTOCOL_FOLDER>`. Read it
+  > before starting work and follow its conventions where they apply
+  > to your task.
+
+The signal is soft — orchestra does NOT enforce that the working sessions
+follow the protocol. Leave empty to opt out (the templated sentence is
+removed from the prompts entirely).
+
+Example for a project with conventions at `Development/conventions/`:
+`PROTOCOL_FOLDER: Development/conventions/`
+
 ## Tmux
 - `TMUX_PREFIX`: orchestra
 

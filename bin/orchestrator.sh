@@ -443,12 +443,26 @@ build_session_prompt() {
     # The Organiser prompt is the single source of truth for the working-
     # session contract — same loading shape as the wind-down prompt.
     # Substitutions match the placeholders in lib/organiser-prompt.txt.
-    cat "$WORKTREE_DIR/.orchestra/runtime/lib/organiser-prompt.txt" \
-        | sed "s|__RUN_DIR__|$RUN_DIR|g" \
-        | sed "s|__RUN_TS__|$RUN_TS|g" \
-        | sed "s|__SESSION_NUM__|$n|g" \
-        | sed "s|__WORKTREE_DIR__|$WORKTREE_DIR|g" \
-        | sed "s|__ORGANISER_CONTEXT_THRESHOLD__|$ORGANISER_CONTEXT_THRESHOLD|g"
+    # PROTOCOL_FOLDER: when set, substitute path; when empty/unset,
+    # delete the templated sentence line entirely (spec § 3.8).
+    local protocol_folder="${ORCHESTRA_CONFIG[PROTOCOL_FOLDER]:-}"
+    if [ -n "$protocol_folder" ]; then
+        cat "$WORKTREE_DIR/.orchestra/runtime/lib/organiser-prompt.txt" \
+            | sed "s|__RUN_DIR__|$RUN_DIR|g" \
+            | sed "s|__RUN_TS__|$RUN_TS|g" \
+            | sed "s|__SESSION_NUM__|$n|g" \
+            | sed "s|__WORKTREE_DIR__|$WORKTREE_DIR|g" \
+            | sed "s|__ORGANISER_CONTEXT_THRESHOLD__|$ORGANISER_CONTEXT_THRESHOLD|g" \
+            | sed "s|__PROTOCOL_FOLDER__|$protocol_folder|g"
+    else
+        cat "$WORKTREE_DIR/.orchestra/runtime/lib/organiser-prompt.txt" \
+            | sed "s|__RUN_DIR__|$RUN_DIR|g" \
+            | sed "s|__RUN_TS__|$RUN_TS|g" \
+            | sed "s|__SESSION_NUM__|$n|g" \
+            | sed "s|__WORKTREE_DIR__|$WORKTREE_DIR|g" \
+            | sed "s|__ORGANISER_CONTEXT_THRESHOLD__|$ORGANISER_CONTEXT_THRESHOLD|g" \
+            | sed '/__PROTOCOL_FOLDER__/d'
+    fi
 }
 
 while [ $session_num -lt $MAX_SESSIONS ] && [ $crash_count -lt $MAX_CRASHES ]; do
@@ -618,9 +632,19 @@ EOF
                 # in cmd_run before exec'ing the orchestrator, so no overlap.
                 trap 'rm -f "$WINDDOWN_LOCK"' EXIT INT TERM
 
-                # Build wind-down prompt from template
-                wd_prompt=$(cat "$WORKTREE_DIR/.orchestra/runtime/lib/winddown-prompt.txt" \
-                    | sed "s|__RUN_DIR__|$RUN_DIR|g")
+                # Build wind-down prompt from template.
+                # PROTOCOL_FOLDER: when set, substitute path; when empty/unset,
+                # delete the templated sentence line entirely (spec § 3.8).
+                wd_protocol_folder="${ORCHESTRA_CONFIG[PROTOCOL_FOLDER]:-}"
+                if [ -n "$wd_protocol_folder" ]; then
+                    wd_prompt=$(cat "$WORKTREE_DIR/.orchestra/runtime/lib/winddown-prompt.txt" \
+                        | sed "s|__RUN_DIR__|$RUN_DIR|g" \
+                        | sed "s|__PROTOCOL_FOLDER__|$wd_protocol_folder|g")
+                else
+                    wd_prompt=$(cat "$WORKTREE_DIR/.orchestra/runtime/lib/winddown-prompt.txt" \
+                        | sed "s|__RUN_DIR__|$RUN_DIR|g" \
+                        | sed '/__PROTOCOL_FOLDER__/d')
+                fi
 
                 # Spec Section 11.D: prepend damage-assessment preamble when
                 # the previous working session was Cat D (clean intent + dirty
