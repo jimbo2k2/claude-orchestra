@@ -67,6 +67,7 @@ apply_config_defaults() {
     : "${ORCHESTRA_CONFIG[CRASH_COOLDOWN_SECONDS]:=30}"
     : "${ORCHESTRA_CONFIG[SMOKE_TEST_TIMEOUT]:=900}"
     : "${ORCHESTRA_CONFIG[ORGANISER_CONTEXT_THRESHOLD]:=75}"
+    : "${ORCHESTRA_CONFIG[PROTECTED_BRANCHES]:=main,master}"
 }
 
 # Validate ORCHESTRA_CONFIG has required keys and all values pass type/range
@@ -90,7 +91,20 @@ validate_config() {
         ORCHESTRA_CONFIG[MODEL]="$_has_org"
     fi
 
-    local required=(MAX_SESSIONS MAX_CONSECUTIVE_CRASHES ORGANISER_MODEL WORKTREE_BASE BASE_BRANCH)
+    # Reject obsolete keys with a cleanup recipe. BASE_BRANCH and WORKTREE_BASE
+    # are no longer used after the run-in-place refactor (see spec § 3.4-3.5
+    # in the LogRings repo at Pipeline/--inflight/2026-05-10-orchestra-run-in-place/).
+    local obsolete=(BASE_BRANCH WORKTREE_BASE)
+    local okey
+    for okey in "${obsolete[@]}"; do
+        if [ -n "${ORCHESTRA_CONFIG[$okey]:-}" ]; then
+            echo "ERROR: CONFIG.md contains obsolete key '$okey' (left over from the worktree-spawning era)." >&2
+            echo "Remove the '$okey' line from .orchestra/CONFIG.md and re-run. See MIGRATION-run-in-place.md for the full upgrade recipe." >&2
+            return 1
+        fi
+    done
+
+    local required=(MAX_SESSIONS MAX_CONSECUTIVE_CRASHES ORGANISER_MODEL WORKTREE_PATH)
     local key
     for key in "${required[@]}"; do
         if [ -z "${ORCHESTRA_CONFIG[$key]:-}" ]; then
@@ -105,8 +119,7 @@ validate_config() {
     _check_int_min   MAX_HANG_SECONDS        60  || return 1
     _check_enum      ORGANISER_MODEL opus sonnet haiku || return 1
     _check_enum      EFFORT low  medium  high    || return 1
-    _check_abspath   WORKTREE_BASE                || return 1
-    _check_nonempty  BASE_BRANCH                  || return 1
+    _check_abspath   WORKTREE_PATH                || return 1
     _check_pattern   TMUX_PREFIX '^[a-z][a-z0-9-]*$' || return 1
     _check_bool      QUOTA_PACING                 || return 1
     _check_int_range QUOTA_THRESHOLD 1 100        || return 1
