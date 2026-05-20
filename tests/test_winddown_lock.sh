@@ -56,23 +56,24 @@ PATH="$TMP/fake-bin:$PATH" .orchestra/runtime/bin/orchestra run 2>&1
 # Wait for orchestrator to finish (working session + wind-down + archive).
 # The break exits the loop on the first iteration where WORKTREE is non-empty
 # AND the tmux session is gone (i.e. orchestrator has exited).
-WORKTREE=""
+RUN_TS=""
 for _ in $(seq 1 60); do
-    WORKTREE=$(find "$TMP/.orchestra/runs" -mindepth 1 -maxdepth 1 -type d -not -name archive 2>/dev/null | head -1 || true)
-    if [ -n "$WORKTREE" ]; then
-        RUN_TS="$(basename "$WORKTREE")"
+    # Active or archived — whichever appears
+    WT=$(find "$TMP/.orchestra/runs" -mindepth 1 -maxdepth 1 -type d -not -name archive 2>/dev/null | head -1 || true)
+    if [ -z "$WT" ]; then
+        WT=$(find "$TMP/.orchestra/runs/archive" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1 || true)
+    fi
+    if [ -n "$WT" ]; then
+        RUN_TS="$(basename "$WT")"
         tmux has-session -t "orch-wd-$RUN_TS" 2>/dev/null || break
     fi
     sleep 1
 done
 
-WORKTREE=$(find "$TMP/.orchestra/runs" -mindepth 1 -maxdepth 1 -type d -not -name archive | head -1)
-ARCHIVE="$WORKTREE/.orchestra/runs/archive"
+# Run should be archived (run-in-place: archive at <project>/.orchestra/runs/archive/<ts>/).
+ls -d "$TMP/.orchestra/runs/archive"/*/ >/dev/null 2>&1 || { echo "run not archived"; exit 1; }
 
-# Run should be archived
-ls -d "$ARCHIVE"/*/ >/dev/null 2>&1 || { echo "run not archived"; exit 1; }
-
-# Lock file should be released
-[ ! -f "$WORKTREE/.orchestra/runs/.wind-down.lock" ] || { echo "lock not released"; exit 1; }
+# Lock file should be released.
+[ ! -f "$TMP/.orchestra/runs/.wind-down.lock" ] || { echo "lock not released"; exit 1; }
 
 echo "OK"

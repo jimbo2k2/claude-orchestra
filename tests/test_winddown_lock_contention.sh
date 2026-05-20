@@ -89,7 +89,7 @@ real_starttime=$(awk '{print $22}' "/proc/$lock_pid/stat")
 }
 
 # Wait for wind-down to finish
-RUN_TS="${WORKTREE##*/run-}"
+RUN_TS="$(basename "$WORKTREE")"
 for _ in $(seq 1 30); do
     tmux has-session -t "orch-lk-$RUN_TS" 2>/dev/null || break
     sleep 1

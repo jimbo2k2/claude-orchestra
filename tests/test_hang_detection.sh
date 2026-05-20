@@ -41,7 +41,7 @@ WORKTREE=""
 for _ in $(seq 1 14); do
     WORKTREE=$(ls -d "$TMP/wt"/run-* 2>/dev/null | head -1 || true)
     if [ -n "$WORKTREE" ]; then
-        RUN_TS="${WORKTREE##*/run-}"
+        RUN_TS="$(basename "$WORKTREE")"
         tmux has-session -t "orch-c-$RUN_TS" 2>/dev/null || break
     fi
     sleep 10

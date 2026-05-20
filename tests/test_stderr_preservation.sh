@@ -45,7 +45,7 @@ for _ in $(seq 1 30); do
         sleep 1
         continue
     fi
-    RUN_TS="${WT##*/run-}"
+    RUN_TS="$(basename "$WT")"
     tmux has-session -t "orch-stderr-$RUN_TS" 2>/dev/null || break
     sleep 1
 done
