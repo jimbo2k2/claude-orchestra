@@ -148,3 +148,41 @@ that commit) had the full per-phase narrative.
   section now lists two prompts (v2→v3 and v3→organiser) — but worth
   watching. If a future change adds a third migration pointer, factor
   out a `MIGRATIONS-INDEX.md` and link it.
+
+## Prompt enhancements (organiser-prompt.txt)
+
+Surfaced during the LogRings parent-linking run (2026-05-09, run
+`20260509-050540`) when an operator-injected mid-run INBOX message was
+not picked up until the next session boundary, and when the same
+session was unaware that prior-session `9-sessions/NNN.json`
+transcripts contained data it could query.
+
+- **Mid-loop INBOX checks.** Step 1 currently says "1-INBOX.md — human
+  messages (check on cold-start)". This makes INBOX a cold-start-only
+  channel, which surprises operators who reasonably expect it to be
+  the live `human → run` redirection channel that `.orchestra/CLAUDE.md`
+  describes ("edit during a run to inject instructions"). Either (a)
+  add an explicit "between subtasks, also re-read 1-INBOX.md if its
+  mtime is newer than your last check" rule to Step 2's inner loop, or
+  (b) update `.orchestra/CLAUDE.md` and the templated `1-INBOX.md`
+  header to clarify that INBOX is read at session boundaries only and
+  recommend OBJECTIVE.md edits + a fresh `orchestra run` for in-flight
+  redirection. Either is internally consistent; the current state is
+  the worst — semi-promised live channel that's actually batched.
+- **Session-history awareness.** Step 1 lists the numbered files as
+  state to read, but doesn't mention that prior `9-sessions/NNN.json`
+  transcripts (NDJSON) are queryable from the shell — `jq` over them
+  surfaces per-dispatch token totals (`tool_use_result.totalTokens`,
+  `usage.input_tokens`, `usage.output_tokens`, `cache_read_input_tokens`),
+  full Executor briefings (`tool_use_result.prompt`), durations, and
+  tool-use counts, all without loading the whole NDJSON into the
+  session's own context. Add a note to Step 1: "Prior-session
+  transcripts at `9-sessions/NNN.json` are queryable via `jq`/`grep`
+  for retrospective analysis (token reconciliation, briefing audit,
+  cross-session efficiency tracking). Don't load them into context
+  wholesale — query specific fields via shell."
+
+  Both items together would let a session asked to produce
+  cross-session efficiency reports do so completely, rather than
+  filling retrospective entries with "best-effort, data N/A" caveats
+  when the data is actually on disk one directory away.
