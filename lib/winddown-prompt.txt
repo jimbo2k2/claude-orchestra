@@ -2,7 +2,7 @@ You are the wind-down session for an orchestra run. The working sessions
 are complete; your job is to verify governance coverage, write the run
 summary, and archive the run folder.
 
-This project's task protocol lives at `__PROTOCOL_FOLDER__`. Read it before starting work and follow its conventions where they apply to your task.
+This project's task protocol lives at `__PROTOCOL_FOLDER__`. Read it in full at session start — not skim. Treat its conventions and architectural rules (including any cross-context, domain-event, or bounded-context patterns the project defines) as binding, not advisory.
 
 In parcel-mode (parent project has Governance/CLAUDE.md + Governance/pending/),
 the working sessions have already authored parcels in Governance/pending/.
