@@ -13,10 +13,11 @@ Orchestra is a session-orchestration runtime. It runs autonomous multi-session C
 ## Invocation
 
 ```bash
-.orchestra/runtime/bin/orchestra run     # start a run (after CONFIG.md + OBJECTIVE.md committed)
-.orchestra/runtime/bin/orchestra status  # show active/archived run state
-.orchestra/runtime/bin/orchestra test    # run end-to-end smoke test
-.orchestra/runtime/bin/orchestra reset   # archive any in-progress runs
+.orchestra/runtime/bin/orchestra run         # start a run (after CONFIG.md + OBJECTIVE.md committed)
+.orchestra/runtime/bin/orchestra status      # show active/archived run state
+.orchestra/runtime/bin/orchestra test        # run end-to-end smoke test
+.orchestra/runtime/bin/orchestra reset       # archive any in-progress runs (moves runs/<ts>/ → runs/archive/<ts>/)
+.orchestra/runtime/bin/orchestra cold-store  # mothball runs to .orchestra/cold-storage/<ts>-<slug>/ post-rollup
 ```
 
 Suggested alias for convenience: `alias orchestra=.orchestra/runtime/bin/orchestra`.
@@ -56,7 +57,7 @@ Each run creates a numbered file layout under `<project>/.orchestra/runs/<run-ti
 - `9-sessions/summary.json` — single JSON array, one metadata entry per session (timestamps, exit code, signal, crash category)
 - `9-sessions/executor-activity.log` — CSV log of Executor dispatches (timestamp,session,task,model,outcome,duration).
 
-After successful wind-down the folder moves to `.orchestra/runs/archive/<timestamp>/`.
+After successful wind-down the folder moves to `.orchestra/runs/archive/<timestamp>/`. Post-rollup, the operator runs `orchestra cold-store` to mothball both that archive entry and any leftover `runs/<ts>/` folders to `.orchestra/cold-storage/<timestamp>-<objective-slug>/` — keeping `runs/` clean for the next preflight and self-documenting each retired run by its OBJECTIVE summary. See `MIGRATION-run-in-place.md § Cold-storage` for the slug derivation rules.
 
 ## Governance model
 

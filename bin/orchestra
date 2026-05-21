@@ -18,14 +18,115 @@ usage() {
 Usage: orchestra <command> [args]
 
 Commands:
-  init [dir]   Scaffold .orchestra/ state files in target directory
-  run          Start an orchestra run (uses .orchestra/CONFIG.md + OBJECTIVE.md)
-  status       Show current run state
-  test         Run end-to-end smoke test
-  reset        Archive current run state, reset for next
+  init [dir]    Scaffold .orchestra/ state files in target directory
+  run           Start an orchestra run (uses .orchestra/CONFIG.md + OBJECTIVE.md)
+  status        Show current run state
+  test          Run end-to-end smoke test
+  reset         Archive current run state, reset for next
+  cold-store    Mothball runs/<ts>/ and runs/archive/<ts>/ folders to
+                .orchestra/cold-storage/<ts>-<slug>/ with a slug derived
+                from each run's 2-OBJECTIVE.md. Refuses if any orchestra
+                tmux session is active. See MIGRATION-run-in-place.md.
 
 All run parameters live in .orchestra/CONFIG.md — no env vars, no CLI args.
 EOF
+}
+
+# Slugify a run's 2-OBJECTIVE.md into a folder-name-safe slug.
+# Rules (per the cold-store convention):
+#   1. Read the first non-empty line.
+#   2. Strip leading '#' marks and a 'Run Objective' / 'Objective' prefix
+#      (with any trailing em-dash, en-dash, hyphen, or colon separator).
+#   3. Lowercase. Replace runs of non-[a-z0-9] with a single hyphen.
+#      Strip leading and trailing hyphens.
+#   4. Truncate to ≤60 chars; if truncation lands mid-word, back up to the
+#      last hyphen boundary.
+# Returns the slug on stdout (empty string if the file is missing or yields
+# nothing).
+_slugify_objective() {
+    local file="$1"
+    [ -f "$file" ] || { echo ""; return 0; }
+    local line
+    line=$(awk 'NF { print; exit }' "$file" 2>/dev/null) || true
+    [ -n "$line" ] || { echo ""; return 0; }
+    line=$(printf '%s' "$line" | sed -E 's/^#+[[:space:]]*//; s/^([Rr]un [Oo]bjective|[Oo]bjective)[[:space:]]*[-—–:][[:space:]]*//')
+    line=$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+    if [ ${#line} -gt 60 ]; then
+        line="${line:0:60}"
+        # Back up to last hyphen unless that wipes the whole string.
+        if [[ "$line" == *-* ]]; then
+            line="${line%-*}"
+        fi
+    fi
+    printf '%s' "$line"
+}
+
+cmd_cold_store() {
+    local project_dir
+    project_dir="$(git rev-parse --show-toplevel 2>/dev/null)" || die "Not in a git repository"
+    local orch="$project_dir/.orchestra"
+    [ -d "$orch" ] || die ".orchestra/ not found. Run 'orchestra init' first."
+
+    declare -gA ORCHESTRA_CONFIG
+    # shellcheck source=/dev/null
+    source "$orch/runtime/lib/config.sh"
+    parse_config_md "$orch/CONFIG.md" || die "CONFIG.md parse failed"
+    apply_config_defaults
+
+    local tmux_prefix="${ORCHESTRA_CONFIG[TMUX_PREFIX]}"
+
+    # Refuse if any tmux session matching <TMUX_PREFIX>-* is alive — that
+    # means an orchestra run is in progress and we'd race against wind-down.
+    if tmux ls 2>/dev/null | grep -qE "^${tmux_prefix}-"; then
+        die "Refusing to cold-store while an orchestra run is active (tmux session '${tmux_prefix}-*' exists)."
+    fi
+
+    local cold_dir="$orch/cold-storage"
+    mkdir -p "$cold_dir"
+
+    local moved=0
+    local run ts slug dest
+
+    # Sources: active runs (runs/<ts>/) + archived runs (runs/archive/<ts>/).
+    # Move both to cold-storage/<ts>-<slug>/.
+    for src_root in "$orch/runs" "$orch/runs/archive"; do
+        [ -d "$src_root" ] || continue
+        while IFS= read -r run; do
+            [ -n "$run" ] || continue
+            ts="$(basename "$run")"
+            # Skip archive/ itself (depth-1 of runs/) — it isn't a run folder.
+            [ "$ts" = "archive" ] && continue
+            slug=$(_slugify_objective "$run/2-OBJECTIVE.md")
+            if [ -n "$slug" ]; then
+                dest="$cold_dir/${ts}-${slug}"
+            else
+                dest="$cold_dir/${ts}"
+            fi
+            # If the destination already exists (rare — would mean a duplicate
+            # ts+slug across active/archive), append a `-dup` suffix.
+            if [ -e "$dest" ]; then
+                dest="${dest}-dup"
+            fi
+            # Prefer 'git mv' so the move is staged + traceable. Fall back to
+            # plain 'mv' for files not tracked in git (e.g. fresh init in a
+            # repo without these runs committed).
+            if git -C "$project_dir" ls-files --error-unmatch "$run" >/dev/null 2>&1; then
+                git -C "$project_dir" mv "$run" "$dest"
+            else
+                mv "$run" "$dest"
+            fi
+            moved=$((moved + 1))
+        done < <(find "$src_root" -mindepth 1 -maxdepth 1 -type d -not -name archive 2>/dev/null)
+    done
+
+    # Remove the now-empty runs/archive/ directory (best effort).
+    rmdir "$orch/runs/archive" 2>/dev/null || true
+
+    echo "Cold-storage: $moved run folder(s) moved to .orchestra/cold-storage/"
+    echo ""
+    echo "Review and commit with something like:"
+    echo "  git -C $project_dir add .orchestra/"
+    echo "  git -C $project_dir commit -m 'orchestra: cold-store $moved historical run folders'"
 }
 
 die() { echo "ERROR: $1" >&2; exit 1; }
@@ -850,6 +951,7 @@ case "$cmd" in
     status)    cmd_status "$@" ;;
     test)      cmd_test "$@" ;;
     reset)     cmd_reset "$@" ;;
+    cold-store|coldstore|cold_store) cmd_cold_store "$@" ;;
     -h|--help|help|"") usage; exit 0 ;;
     *) echo "Unknown command: $cmd" >&2; usage >&2; exit 1 ;;
 esac

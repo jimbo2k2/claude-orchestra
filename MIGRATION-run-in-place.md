@@ -56,6 +56,48 @@ If `orchestra run` refuses, the error message names the specific check that fail
 3. `orchestra run`. Preflight checks fire before anything happens; on pass, orchestra runs in place and commits on HEAD.
 4. After the run, the work is on your feature branch. You handle the feature → main rollup yourself (the wind-down session no longer does this).
 
+## Cold-storage for historical run folders
+
+In the pre-run-in-place era, each project's `.orchestra/runs/` accumulated `<ts>/` (active) and `archive/<ts>/` (wind-down archived) subfolders that piled up over time. The new `cmd_run` preflight refuses on any non-archive subfolder, so the existing folders must move before the next `orchestra run`.
+
+The intended destination is **`.orchestra/cold-storage/`** (sibling of `runs/`, not inside it). Each cold-storage entry follows a standard naming convention so the folder name self-documents what the run was about:
+
+```
+.orchestra/cold-storage/<YYYYMMDD-HHMMSS>-<objective-slug>/
+```
+
+- `<YYYYMMDD-HHMMSS>` — the run-folder's original timestamp basename (preserves chronology and disambiguates retry attempts).
+- `<objective-slug>` — derived from the first non-empty line of `2-OBJECTIVE.md` inside that run:
+  1. Strip leading `#` marks and a `Run Objective` / `Objective` prefix (with any trailing em-dash, en-dash, hyphen, or colon separator).
+  2. Lowercase. Replace runs of non-`[a-z0-9]` with a single hyphen. Strip leading and trailing hyphens.
+  3. Truncate to ≤60 chars; if truncation lands mid-word, back up to the last hyphen boundary.
+
+Worked examples:
+
+| Original | After cold-store |
+|---|---|
+| `runs/20260520-120510/` (`# Run Objective — Offline-First Read-Path Slice 2 (Posts + Tags Fanout)`) | `cold-storage/20260520-120510-offline-first-read-path-slice-2-posts-tags-fanout/` |
+| `runs/archive/20260501-152641/` (`# Run Objective — TODO/TODO.md Cleanup`) | `cold-storage/20260501-152641-todo-todo-md-cleanup/` |
+
+### `orchestra cold-store` (the helper)
+
+A new subcommand bulks the move:
+
+```bash
+.orchestra/runtime/bin/orchestra cold-store
+```
+
+Behavior:
+- Refuses if any tmux session matching `<TMUX_PREFIX>-*` is alive (a run is in progress).
+- Moves every `runs/<ts>/` and `runs/archive/<ts>/` folder to `cold-storage/<ts>-<slug>/` using the slugifier above.
+- Uses `git mv` for git-tracked folders (so the move is staged); falls back to `mv` for untracked.
+- Removes the now-empty `runs/archive/` directory.
+- Prints a suggested commit recipe.
+
+**Forward-going protocol**: after each orchestra run completes and the operator does the feature → main rollup + W4 parcel ingestion, the operator can `orchestra cold-store` to mothball that run (along with any earlier archived runs not yet mothballed). The `runs/` folder stays clean for the next preflight.
+
+The intermediate `runs/archive/<ts>/` shape stays — wind-down still archives there. Cold-storage is the post-rollup mothball, not a wind-down output. This keeps the wind-down agent's contract simple.
+
 ## What does NOT change
 
 - Per-step commit discipline (the W2 hook, if you have one configured in the parent project).
