@@ -42,15 +42,18 @@ for tmpl in lib/organiser-prompt.txt lib/winddown-prompt.txt; do
 done
 echo "Prong B (empty PROTOCOL_FOLDER, orchestrator-substituted): PASS"
 
-# Executor template: assert the templated sentence is present WITH the literal sentinel
-# (Organiser substitutes at brief-construction time, not at run-launch).
+# Executor template (LEGACY Agent-tool path): still ships with the literal sentinel sentence.
+# Post lr-tmux swap it is ORPHANED — the lr-tmux dispatch path does NOT use it; the assertion
+# documents that the legacy template is unchanged, not that it is live.
 grep -q "This project's task protocol lives at \`__PROTOCOL_FOLDER__\`" "$REPO/lib/executor-prompt-template.txt" || { echo "executor-prompt-template.txt missing the templated sentence with __PROTOCOL_FOLDER__"; exit 1; }
-echo "Executor template (literal sentinel present, Organiser-substituted at runtime): PASS"
+echo "Executor template (legacy literal sentinel present): PASS"
 
-# Organiser prompt: assert the Organiser-side substitution instruction is present
-# (so the Organiser knows to substitute __PROTOCOL_FOLDER__ in executor briefs).
-grep -q "executor-prompt-template" "$REPO/lib/organiser-prompt.txt" || { echo "organiser-prompt.txt missing executor-template reference"; exit 1; }
-grep -qE "perform the (following )?substitution|substitute.*__PROTOCOL_FOLDER__|mirror what orchestrator" "$REPO/lib/organiser-prompt.txt" || { echo "organiser-prompt.txt missing Organiser-side substitution instruction"; exit 1; }
-echo "Organiser substitution-instruction: PASS"
+# Organiser prompt (lr-tmux path): worker task files carry NO protocol pointer — the lr-* worker
+# reads the project cascade itself — so the Organiser no longer does brief-time __PROTOCOL_FOLDER__
+# substitution. Assert the new contract states this, and that the removed mirror-substitution block
+# is gone.
+grep -qi "carry no protocol pointer" "$REPO/lib/organiser-prompt.txt" || { echo "organiser-prompt.txt missing the 'no protocol pointer' worker-task-file contract"; exit 1; }
+grep -qE "mirror what orchestrator" "$REPO/lib/organiser-prompt.txt" && { echo "organiser-prompt.txt still carries the removed executor-brief substitution block"; exit 1; } || true
+echo "Organiser worker-task-file contract (no protocol pointer): PASS"
 
 echo "test_protocol_folder: PASS"

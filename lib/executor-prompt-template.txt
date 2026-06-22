@@ -1,4 +1,9 @@
 # Executor briefing — __TASK_ID__
+#
+# ORPHANED (lr-tmux Executor swap, 2026-06-22): the lr-tmux dispatch path does NOT use this
+# template — the Organiser writes lean worker task files and the lr-* worker reads the project
+# CLAUDE.md cascade itself. Retained only for the legacy Agent-tool dispatch path. `bin/orchestra`
+# still copies it on `init` (out of scope for the swap); do not treat it as the live worker brief.
 
 This project's task protocol lives at `__PROTOCOL_FOLDER__`. Read it in full at session start — not skim. Treat its conventions and architectural rules (including any cross-context, domain-event, or bounded-context patterns the project defines) as binding, not advisory.
 

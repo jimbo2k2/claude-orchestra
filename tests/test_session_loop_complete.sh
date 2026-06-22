@@ -100,7 +100,7 @@ code=$(jq -r '.[0].exit_code' "$f")
 # in the legacy heredoc.
 [ -s "$TMP/captured-prompt" ] || { echo "expected captured prompt file to exist and be non-empty"; exit 1; }
 grep -q "You are the Organiser" "$TMP/captured-prompt" || { echo "expected Organiser prompt marker in captured prompt; got first 5 lines:"; head -5 "$TMP/captured-prompt"; exit 1; }
-grep -q "Agent tool" "$TMP/captured-prompt" || { echo "expected Agent-tool reference in captured prompt"; exit 1; }
+grep -q "lr-tmux" "$TMP/captured-prompt" || { echo "expected lr-tmux dispatch reference in captured prompt"; exit 1; }
 # Placeholders must be substituted, not left literal.
 ! grep -q "__RUN_DIR__\|__SESSION_NUM__\|__ORGANISER_CONTEXT_THRESHOLD__" "$TMP/captured-prompt" || { echo "expected all __PLACEHOLDERS__ to be substituted"; exit 1; }
 
