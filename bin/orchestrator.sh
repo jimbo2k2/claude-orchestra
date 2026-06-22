@@ -329,14 +329,14 @@ run_session_with_watchdog() {
     local inotify_log inotify_err
     inotify_log=$(mktemp)
     inotify_err=$(mktemp)
-    inotifywait -mr --format '.' "$WORKTREE_DIR" >> "$inotify_log" 2>"$inotify_err" &
+    inotifywait -mr --exclude '(node_modules|\.git)' --format '.' "$WORKTREE_DIR" >> "$inotify_log" 2>"$inotify_err" &
     local inotify_pid=$!
 
     # Verify inotifywait is actually watching. inotifywait prints
     # "Watches established." to stderr once it's up. If it failed at startup
     # (max_user_watches, EACCES, etc.), bailing here is correct — running with
     # only stdout-silence detection guarantees false-positive Cat C hangs.
-    local startup_deadline=$(($(date +%s) + 5))
+    local startup_deadline=$(($(date +%s) + 30))
     while [ "$(date +%s)" -lt "$startup_deadline" ]; do
         if ! kill -0 "$inotify_pid" 2>/dev/null; then
             echo "ERROR: inotifywait died at startup. stderr:" >&2
@@ -351,7 +351,7 @@ run_session_with_watchdog() {
     done
 
     if ! grep -q "Watches established" "$inotify_err" 2>/dev/null; then
-        echo "ERROR: inotifywait did not establish watches within 5s. stderr:" >&2
+        echo "ERROR: inotifywait did not establish watches within 30s. stderr:" >&2
         cat "$inotify_err" >&2
         kill -TERM "$inotify_pid" 2>/dev/null || true
         rm -f "$inotify_log" "$inotify_err"
